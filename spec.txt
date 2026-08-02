@@ -1,0 +1,158 @@
+TPT Lattice: Comprehensive Design Document
+Project Name: TPT Lattice
+Version: 0.1.0 (Draft)
+License: MIT OR Apache-2.0
+Ecosystem: tpt-solutions
+Core Technologies: Rust, WebAssembly (Wasm), TypeScript, CRDTs, HTML5 Canvas/WebGL
+1. Executive Summary
+TPT Lattice is a next-generation, open-source, real-time collaborative spreadsheet engine built from first principles. Unlike legacy spreadsheet software burdened by decades of backward compatibility and implicit type coercion, TPT Lattice is designed for mathematical correctness, memory safety, and absolute predictability.
+It decouples the calculation engine from the user interface, compiling the core logic to WebAssembly for near-native browser performance, while utilizing a Conflict-free Replicated Data Type (CRDT) for robust, offline-first, real-time collaboration. The project is structured as a modular Rust workspace, with every component designed for publication on crates.io to foster ecosystem reuse.
+2. Core Design Principles
+First-Principles Correctness: No legacy Excel/Google Sheets quirks. Formulas are strictly typed, and errors are first-class citizens that propagate safely (inspired by Rust’s Result and Option).
+Verification-First: The core engine is designed to be formally verifiable. Critical paths (DAG cycle detection, formula evaluation) will be accompanied by property-based tests (proptest) and are structured to support model checking (e.g., kani).
+no_std & alloc Compatibility: The foundational crates (core, parser) will be #![no_std] compatible, ensuring they can be deployed in constrained environments, embedded systems, or highly optimized Wasm payloads.
+Offline-First Architecture: The CRDT layer ensures that the application works flawlessly without an internet connection, syncing seamlessly when connectivity is restored.
+Modular by Default: Every component is a standalone crates.io crate. A developer should be able to use tpt-lattice-parser for a CLI calculator without pulling in the CRDT or Wasm bindings.
+3. System Architecture
+
+┌─────────────────────────────────────────────────────────────────┐
+│                        Frontend (TypeScript)                    │
+│  ┌──────────────────────┐  ┌─────────────────────────────────┐  │
+│  │  Virtualized Canvas  │  │  UI Chrome (Toolbars, Modals)   │  │
+│  │  / WebGL Renderer    │  │  (Svelte / SolidJS / React)     │  │
+│  └──────────┬───────────┘  └────────────────┬────────────────┘  │
+└─────────────┼────────────────────────────────┼───────────────────┘
+              │ wasm-bindgen                   │ WebSocket / HTTP
+┌─────────────┼────────────────────────────────┼───────────────────┐
+│  ┌──────────▼───────────┐  ┌────────────────▼─────────────────┐  │
+│  │  tpt-lattice-wasm    │  │  tpt-lattice-sync-client         │  │
+│  │  (Web Worker Bridge) │  │  (CRDT Network Layer)            │  │
+│  └──────────┬───────────┘  └────────────────┬─────────────────┘  │
+│             │                                │                    │
+│  ┌──────────▼────────────────────────────────▼─────────────────┐  │
+│  │                Rust Core Engine (Wasm)                      │  │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐   │  │
+│  │  │  Evaluator   │  │    Parser    │  │      CRDT        │   │  │
+│  │  │  (DAG Walk)  │  │  (AST Gen)   │  │  (State Mgmt)    │   │  │
+│  │  └──────┬───────┘  └──────┬───────┘  └────────┬─────────┘   │  │
+│  │         └──────────────────┼──────────────────┘             │  │
+│  │                  ┌─────────▼─────────┐                       │  │
+│  │                  │   tpt-lattice-core│                       │  │
+│  │                  │  (Types, Traits)  │                       │  │
+│  │                  └───────────────────┘                       │  │
+│  └──────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────┘
+              │ (Optional: Local AI via tpt-anima)
+┌─────────────┼─────────────────────────────────────────────────────┐
+│  ┌──────────▼───────────┐  ┌───────────────────────────────────┐  │
+│  │  tpt-lattice-io      │  │  tpt-lattice-import-xlsx (Opt-in) │  │
+│  │  (MsgPack / JSON)    │  │  (Legacy Format Translation)      │  │
+│  └──────────┬───────────┘  └───────────────────────────────────┘  │
+└─────────────┼─────────────────────────────────────────────────────┘
+              │
+┌─────────────▼─────────────────────────────────────────────────────┐
+│  Backend / Storage (Self-Hostable)                                │
+│  ┌──────────────────────┐  ┌───────────────────────────────────┐  │
+│  │  Sync Server (Axum)  │  │  Persistence (tpt-archon / S3)    │  │
+│  └──────────────────────┘  └───────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────┘
+
+4. Crate Architecture (crates.io Workspace)
+The workspace is strictly layered. Higher-level crates depend only on lower-level crates.
+Crate Name
+Purpose
+Key Dependencies
+no_std?
+tpt-lattice-core
+Foundational types: CellId, CellValue, GridState trait, Error types.
+serde (feature-gated)
+✅ Yes
+tpt-lattice-parser
+Lexing and parsing formula strings into a strongly-typed Abstract Syntax Tree (AST).
+tpt-lattice-core, nom or pest
+✅ Yes
+tpt-lattice-evaluator
+Builds the Directed Acyclic Graph (DAG), detects cycles, and evaluates the AST against a GridState.
+tpt-lattice-core, tpt-lattice-parser, petgraph
+❌ No
+tpt-lattice-crdt
+Operation-based CRDT for concurrent, conflict-free grid mutations (inserts, deletes, updates).
+tpt-lattice-core, serde
+❌ No
+tpt-lattice-wasm
+wasm-bindgen glue code. Exposes the engine to JS via a Web Worker API.
+tpt-lattice-core, evaluator, crdt, wasm-bindgen
+❌ No
+tpt-lattice-io
+Serialization/deserialization of the native Lattice state (e.g., MessagePack, compact JSON).
+tpt-lattice-core, rmp-serde
+❌ No
+tpt-lattice-import-xlsx
+Feature-gated. Translates legacy .xlsx files into tpt-lattice-core primitives. Unsupported formulas become explicit Error values.
+tpt-lattice-core, calamine
+❌ No
+5. Data Model & Memory Layout
+To ensure cache efficiency and high performance in Wasm, the grid is not stored as a nested JSON tree or a 2D array of objects.
+Sparse Grid Storage: The grid is represented as a HashMap<CellId, CellData> or a custom sparse matrix structure. Empty cells consume zero memory.
+CellId: A compact u64 bitfield (e.g., 20 bits for column, 44 bits for row) to minimize memory footprint and maximize hash map performance, rather than storing "A1" as a String.
+CellValue Enum
+
+pub enum CellValue {
+    Empty,
+    Number(f64), // IEEE 754, but validated
+    Text(String),
+    Boolean(bool),
+    Error(LatticeError), // First-class error type
+}
+
+Dependency Graph (DAG): Maintained separately from the grid data. Each cell stores a list of dependents (who needs me) and dependencies (who I need). This allows 
+O
+(
+1
+)
+O(1) lookup for invalidation when a cell changes.
+6. The Formula Language: "Lattice Expression Syntax" (LES)
+LES is designed for correctness, abandoning Excel's implicit magic.
+Strict Typing: No implicit coercion. ="5" + 5 yields a TypeError, not 10. Explicit casting is required: =NUMBER("5") + 5.
+Explicit Ranges: Instead of the ambiguous A1:B10, ranges are first-class functional constructs: SUM(RANGE(A1, B10)) or FILTER(RANGE(A1, A10), |x| x > 5).
+First-Class Errors: Errors do not silently propagate as #N/A strings that break downstream math. They are handled explicitly, similar to Rust:
+=MATCH(A1, Ok(v) => v * 2, Err(e) => 0)
+Deterministic Execution: No volatile functions (like RAND() or NOW()) without explicit opt-in flags, ensuring that the same input state always yields the exact same output state (crucial for CRDT convergence and formal verification).
+7. Real-Time Collaboration (CRDT Strategy)
+To achieve Google Sheets-level collaboration without a central locking database, TPT Lattice uses an Operation-based CRDT (Op-CRDT).
+Operations, not State: Clients do not send "Cell A1 is now 5". They send Op::SetCell { cell_id: A1, value: 5, timestamp: VectorClock }.
+Row/Column Inserts: Handled via a unique, immutable identifier (UUID or ULID) for each row/column, rather than integer indices. If User 1 deletes Row 2, and User 2 edits Row 2 concurrently, the edit safely attaches to the immutable Row ID, preventing data corruption.
+Offline Support: Operations are queued in IndexedDB locally. When the network returns, the tpt-lattice-sync-client replays the ops to the server, which broadcasts them to other peers. The CRDT guarantees mathematical convergence.
+8. Rendering Strategy
+The DOM is too slow for a high-performance grid. TPT Lattice uses a hybrid rendering approach:
+Canvas/WebGL Core: The grid lines, cell backgrounds, and text are rendered via HTML5 Canvas (or WebGL via wgpu for extreme performance) using virtualization. Only the visible viewport + a small buffer is drawn.
+DOM Overlay for Editing: When a user double-clicks a cell, a hidden, absolutely-positioned HTML <textarea> or contenteditable div is overlaid exactly on top of the canvas cell. This leverages the browser’s native text selection, IME (Input Method Editor) support, and accessibility features without reinventing the wheel.
+Web Worker Isolation: All parsing, DAG updates, and CRDT merges happen in a dedicated Web Worker. The main thread is solely responsible for painting and capturing input events, guaranteeing 60/120 FPS scrolling even during heavy recalculations.
+9. Ecosystem Integration (The TPT Vision)
+TPT Lattice is not an island; it is designed to interoperate with the broader tpt-solutions ecosystem:
+tpt-archon: Can be used as the zero-copy, capability-based storage backend for persisting Lattice snapshots and CRDT journals.
+tpt-anima: Local AI runtime can be hooked into Lattice to provide "Smart Fill" or natural-language-to-formula translation, running entirely offline in the browser via Wasm.
+tpt-free-erp: TPT Lattice can serve as the embedded, high-performance reporting and data-manipulation engine within the ERP system.
+10. Development Roadmap
+Phase 1: The Headless Core (Weeks 1-4)
+Scaffold Cargo workspace.
+Implement tpt-lattice-core (CellId, CellValue) with no_std support.
+Implement tpt-lattice-parser with nom, generating a robust AST.
+Write exhaustive proptest property tests for the parser.
+Phase 2: The Evaluator & DAG (Weeks 5-8)
+Implement tpt-lattice-evaluator.
+Build the dependency graph using petgraph.
+Implement cycle detection (e.g., Tarjan's strongly connected components).
+Compile to Wasm and write a basic JS harness to prove evaluation works.
+Phase 3: The CRDT & Sync (Weeks 9-12)
+Design and implement tpt-lattice-crdt (Op-based).
+Build a minimal Axum WebSocket server for broadcasting ops.
+Implement local-first IndexedDB queuing in the TS client.
+Phase 4: The Canvas UI (Weeks 13-16)
+Build the virtualized Canvas renderer in TypeScript.
+Implement the DOM-overlay editing mechanism.
+Connect the UI to the Wasm worker via wasm-bindgen.
+Phase 5: Polish & Ingest (Weeks 17+)
+Implement tpt-lattice-io (MessagePack export/import).
+Build tpt-lattice-import-xlsx as an opt-in, feature-gated crate.
+Publish all crates to crates.io with comprehensive documentation.
