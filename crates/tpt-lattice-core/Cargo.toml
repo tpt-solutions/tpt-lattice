@@ -1,0 +1,21 @@
+[package]
+name = "tpt-lattice-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Foundational types for the TPT Lattice spreadsheet engine: CellId, CellValue, errors. no_std compatible."
+keywords = ["spreadsheet", "crdt", "data", "no_std"]
+categories = ["data-structures", "parsing"]
+
+[dependencies]
+serde = { workspace = true, optional = true }
+
+[features]
+default = []
+serde = ["dep:serde"]
+
+[dev-dependencies]
+serde_json = { workspace = true }

@@ -1,0 +1,19 @@
+[package]
+name = "tpt-lattice-evaluator"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Dependency DAG, Tarjan cycle detection, and incremental evaluation for TPT Lattice."
+keywords = ["spreadsheet", "dag", "evaluator", "formula"]
+categories = ["data-structures", "algorithms"]
+
+[dependencies]
+tpt-lattice-core = { workspace = true }
+tpt-lattice-parser = { workspace = true }
+petgraph = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
