@@ -101,7 +101,7 @@ impl CellId {
         let mut column: u64 = 0;
         while i < bytes.len() {
             let b = bytes[i];
-            if !(b'A'..=b'Z').contains(&b) && !(b'a'..=b'z').contains(&b) {
+            if !b.is_ascii_uppercase() && !b.is_ascii_lowercase() {
                 break;
             }
             let digit = if b <= b'Z' { b - b'A' } else { b - b'a' };

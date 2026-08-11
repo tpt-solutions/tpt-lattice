@@ -22,10 +22,14 @@ use tpt_lattice_core::{CellId, CellValue};
 use tpt_lattice_evaluator::Evaluator;
 use wasm_bindgen::prelude::*;
 
-use tpt_lattice_crdt::{CrdtStore, Op};
+use tpt_lattice_crdt::{ActorId, CrdtStore, Op};
 
 /// A single request from the main thread to the engine worker.
+///
+/// Serialized with an externally-tagged `"type"` field so the JSON shape is
+/// `{ "type": "SetCell", "cell": "A1", "value": { "Number": 42 } }`.
 #[derive(serde::Deserialize)]
+#[serde(tag = "type")]
 pub enum Request {
     SetCell { cell: String, value: CellValue },
     SetFormula { cell: String, formula: String },
@@ -33,6 +37,13 @@ pub enum Request {
     Evaluate,
     ApplyOps { ops: Vec<Op> },
     Reset,
+    /// (Re)assign this replica's actor id. Each collaborative client must use a
+    /// distinct id so the CRDT's last-writer-wins rule is deterministic.
+    Init { actor: ActorId },
+    /// Delete a cell (authored op; recorded in the outbox for sync).
+    DeleteCell { cell: String },
+    /// Drain and return the ops this replica has authored since the last call.
+    TakeOutbox,
 }
 
 /// A response from the engine worker back to the main thread.
@@ -43,12 +54,17 @@ pub enum Response {
     Ok,
     Evaluated,
     OpsAccepted { count: usize },
+    /// Locally-authored ops drained from the outbox.
+    Outbox { ops: Vec<Op> },
     Error { message: String },
 }
 
 struct State {
     engine: Evaluator,
     crdt: CrdtStore,
+    /// Ops authored locally since the last [`Request::TakeOutbox`], awaiting
+    /// broadcast to peers.
+    outbox: Vec<Op>,
 }
 
 /// The engine handle exposed to JS. Wraps the evaluator and a CRDT store.
@@ -62,14 +78,24 @@ impl LatticeEngine {
     /// Create a new engine instance.
     #[wasm_bindgen(constructor)]
     pub fn new() -> LatticeEngine {
+        LatticeEngine::default()
+    }
+}
+
+impl Default for LatticeEngine {
+    fn default() -> Self {
         LatticeEngine {
             state: Mutex::new(State {
                 engine: Evaluator::new(),
                 crdt: CrdtStore::new(1),
+                outbox: Vec::new(),
             }),
         }
     }
+}
 
+#[wasm_bindgen]
+impl LatticeEngine {
     /// Handle a JSON-encoded [`Request`], returning a JSON-encoded
     /// [`Response`]. Any error is returned as an `{ "type": "Error", ... }`.
     pub fn handle(&self, request_json: &str) -> String {
@@ -83,33 +109,46 @@ impl LatticeEngine {
                 Ok(id) => {
                     let clock = state.crdt.clock().clone();
                     let actor = state.crdt.actor();
-                    state.engine.set_value(id, value.clone());
-                    state.crdt.apply(Op::SetCell {
+                    let v = value.clone();
+                    let op = Op::SetCell {
                         cell: id,
                         value,
                         clock,
                         actor,
-                    });
+                    };
+                    state.engine.set_value(id, v);
+                    state.crdt.apply(op.clone());
+                    state.outbox.push(op);
                     Response::Ok
                 }
-                Err(e) => Response::Error { message: e.to_string() },
+                Err(e) => Response::Error {
+                    message: e.to_string(),
+                },
             },
             Request::SetFormula { cell, formula } => match CellId::try_from_a1(&cell) {
                 Ok(id) => match state.engine.recompute(id, &formula) {
                     Ok(_) => Response::Ok,
-                    Err(e) => Response::Error { message: e.to_string() },
+                    Err(e) => Response::Error {
+                        message: e.to_string(),
+                    },
                 },
-                Err(e) => Response::Error { message: e.to_string() },
+                Err(e) => Response::Error {
+                    message: e.to_string(),
+                },
             },
             Request::GetCell { cell } => match CellId::try_from_a1(&cell) {
                 Ok(id) => Response::Value {
                     value: state.engine.get_value(id),
                 },
-                Err(e) => Response::Error { message: e.to_string() },
+                Err(e) => Response::Error {
+                    message: e.to_string(),
+                },
             },
             Request::Evaluate => match state.engine.evaluate() {
                 Ok(_) => Response::Evaluated,
-                Err(e) => Response::Error { message: e.to_string() },
+                Err(e) => Response::Error {
+                    message: e.to_string(),
+                },
             },
             Request::ApplyOps { ops } => {
                 let count = ops.len();
@@ -125,8 +164,39 @@ impl LatticeEngine {
                 *state = State {
                     engine: Evaluator::new(),
                     crdt: CrdtStore::new(state.crdt.actor()),
+                    outbox: Vec::new(),
                 };
                 Response::Ok
+            }
+            Request::Init { actor } => {
+                *state = State {
+                    engine: Evaluator::new(),
+                    crdt: CrdtStore::new(actor),
+                    outbox: Vec::new(),
+                };
+                Response::Ok
+            }
+            Request::DeleteCell { cell } => match CellId::try_from_a1(&cell) {
+                Ok(id) => {
+                    let clock = state.crdt.clock().clone();
+                    let actor = state.crdt.actor();
+                    let op = Op::DeleteCell { cell: id, clock, actor };
+                    state.crdt.apply(op.clone());
+                    state.outbox.push(op);
+                    // Re-materialize the evaluator from the CRDT.
+                    state.engine = Evaluator::new();
+                    for (cid, value) in crdt_cells(&state.crdt) {
+                        state.engine.set_value(cid, value);
+                    }
+                    Response::Ok
+                }
+                Err(e) => Response::Error {
+                    message: e.to_string(),
+                },
+            },
+            Request::TakeOutbox => {
+                let ops = std::mem::take(&mut state.outbox);
+                Response::Outbox { ops }
             }
         };
         serde_json::to_string(&resp).unwrap_or_else(|e| error_response(&e.to_string()))

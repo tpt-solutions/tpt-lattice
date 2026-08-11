@@ -39,7 +39,10 @@ mod tests {
 
     impl GridState for MockGrid {
         fn get_cell(&self, id: CellId) -> CellValue {
-            self.cells.get(&id.to_bits()).cloned().unwrap_or(CellValue::Empty)
+            self.cells
+                .get(&id.to_bits())
+                .cloned()
+                .unwrap_or(CellValue::Empty)
         }
         fn set_cell(&mut self, id: CellId, value: CellValue) {
             if value.is_empty() {
@@ -52,7 +55,9 @@ mod tests {
 
     #[test]
     fn trait_roundtrip() {
-        let mut g = MockGrid { cells: BTreeMap::new() };
+        let mut g = MockGrid {
+            cells: BTreeMap::new(),
+        };
         let id = CellId::from_a1("A1");
         assert!(!g.has_cell(id));
         g.set_cell(id, CellValue::Number(7.0));

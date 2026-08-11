@@ -3,9 +3,7 @@
 use std::collections::HashMap;
 
 use tpt_lattice_core::{CellId, CellValue, GridState, LatticeError};
-use tpt_lattice_parser::ast::{
-    BinaryOp, CastKind, CellRef, Expr, Literal, MatchPattern, UnaryOp,
-};
+use tpt_lattice_parser::ast::{BinaryOp, CastKind, CellRef, Expr, Literal, MatchPattern, UnaryOp};
 
 use crate::dag::MAX_RANGE_CELLS;
 
@@ -144,7 +142,9 @@ fn logical<F: Fn(bool, bool) -> bool>(l: CellValue, r: CellValue, f: F) -> CellV
 fn cmp<F: Fn(std::cmp::Ordering) -> bool>(l: CellValue, r: CellValue, pred: F) -> CellValue {
     use std::cmp::Ordering;
     match (&l, &r) {
-        (CellValue::Number(a), CellValue::Number(b)) => bool_of(pred(a.partial_cmp(b).unwrap_or(Ordering::Equal))),
+        (CellValue::Number(a), CellValue::Number(b)) => {
+            bool_of(pred(a.partial_cmp(b).unwrap_or(Ordering::Equal)))
+        }
         (CellValue::Text(a), CellValue::Text(b)) => bool_of(pred(a.cmp(b))),
         (CellValue::Boolean(a), CellValue::Boolean(b)) => bool_of(pred(a.cmp(b))),
         (CellValue::Error(e), _) | (_, CellValue::Error(e)) => CellValue::Error(e.clone()),
@@ -366,7 +366,9 @@ fn reduce_numbers(
     name: &str,
 ) -> CellValue {
     if args.is_empty() {
-        return CellValue::Error(LatticeError::argument_error(format!("{name} expects at least one argument")));
+        return CellValue::Error(LatticeError::argument_error(format!(
+            "{name} expects at least one argument"
+        )));
     }
     match collect_numbers(args, grid, env) {
         Ok(nums) => CellValue::Number(nums.into_iter().fold(init, &f)),
@@ -374,7 +376,12 @@ fn reduce_numbers(
     }
 }
 
-fn min_max(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValue>, is_min: bool) -> CellValue {
+fn min_max(
+    args: &[Expr],
+    grid: &dyn GridState,
+    env: &mut HashMap<String, CellValue>,
+    is_min: bool,
+) -> CellValue {
     match collect_numbers(args, grid, env) {
         Ok(nums) => {
             if nums.is_empty() {
@@ -419,7 +426,9 @@ fn unary_num(
     name: &str,
 ) -> CellValue {
     if args.len() != 1 {
-        return CellValue::Error(LatticeError::argument_error(format!("{name} expects one argument")));
+        return CellValue::Error(LatticeError::argument_error(format!(
+            "{name} expects one argument"
+        )));
     }
     match eval_expr(&args[0], grid, env) {
         CellValue::Number(n) => CellValue::Number(f(n)),
@@ -436,7 +445,9 @@ fn binary_num(
     name: &str,
 ) -> CellValue {
     if args.len() != 2 {
-        return CellValue::Error(LatticeError::argument_error(format!("{name} expects two arguments")));
+        return CellValue::Error(LatticeError::argument_error(format!(
+            "{name} expects two arguments"
+        )));
     }
     let a = eval_expr(&args[0], grid, env);
     let b = eval_expr(&args[1], grid, env);
@@ -449,7 +460,9 @@ fn binary_num(
 
 fn round(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValue>) -> CellValue {
     if args.len() != 1 && args.len() != 2 {
-        return CellValue::Error(LatticeError::argument_error("ROUND expects 1 or 2 arguments"));
+        return CellValue::Error(LatticeError::argument_error(
+            "ROUND expects 1 or 2 arguments",
+        ));
     }
     let n = match eval_expr(&args[0], grid, env) {
         CellValue::Number(n) => n,
@@ -460,7 +473,9 @@ fn round(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValu
         match eval_expr(&args[1], grid, env) {
             CellValue::Number(d) => d as i32,
             CellValue::Error(e) => return CellValue::Error(e),
-            other => return CellValue::Error(LatticeError::type_error("Number", variant_name(&other))),
+            other => {
+                return CellValue::Error(LatticeError::type_error("Number", variant_name(&other)))
+            }
         }
     } else {
         0
@@ -496,7 +511,9 @@ fn len(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValue>
 
 fn if_fn(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValue>) -> CellValue {
     if args.len() != 3 {
-        return CellValue::Error(LatticeError::argument_error("IF expects (cond, then, else)"));
+        return CellValue::Error(LatticeError::argument_error(
+            "IF expects (cond, then, else)",
+        ));
     }
     match eval_expr(&args[0], grid, env) {
         CellValue::Boolean(true) => eval_expr(&args[1], grid, env),
@@ -518,13 +535,19 @@ fn fold_bool(
         match eval_expr(arg, grid, env) {
             CellValue::Boolean(b) => acc = f(acc, b),
             CellValue::Error(e) => return CellValue::Error(e),
-            other => return CellValue::Error(LatticeError::type_error("Boolean", variant_name(&other))),
+            other => {
+                return CellValue::Error(LatticeError::type_error("Boolean", variant_name(&other)))
+            }
         }
     }
     CellValue::Boolean(acc)
 }
 
-fn unary_bool(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValue>) -> CellValue {
+fn unary_bool(
+    args: &[Expr],
+    grid: &dyn GridState,
+    env: &mut HashMap<String, CellValue>,
+) -> CellValue {
     if args.len() != 1 {
         return CellValue::Error(LatticeError::argument_error("NOT expects one argument"));
     }

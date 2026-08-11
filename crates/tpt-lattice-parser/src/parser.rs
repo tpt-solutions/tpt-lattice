@@ -20,9 +20,7 @@ use alloc::vec::Vec;
 
 use nom::branch::alt;
 use nom::bytes::complete::tag;
-use nom::character::complete::{
-    alphanumeric1, anychar, char, digit1, multispace0, one_of,
-};
+use nom::character::complete::{alphanumeric1, anychar, char, digit1, multispace0, one_of};
 use nom::combinator::{map, not, opt, recognize, value};
 use nom::error::{Error as NomError, ErrorKind};
 use nom::sequence::{delimited, preceded, terminated, tuple};
@@ -108,7 +106,9 @@ fn p_string(input: &str) -> P<'_, Expr> {
         if let Ok((rest, _)) = char::<_, NomError<&str>>('"')(i) {
             return Ok((rest, Expr::Literal(Literal::Text(out))));
         }
-        if let Ok((rest, c)) = preceded(char('\\'), one_of::<&str, &str, NomError<&str>>("\"\\nrt"))(i) {
+        if let Ok((rest, c)) =
+            preceded(char('\\'), one_of::<&str, &str, NomError<&str>>("\"\\nrt"))(i)
+        {
             let c = match c {
                 'n' => '\n',
                 'r' => '\r',
@@ -220,8 +220,7 @@ fn p_match_call(input: &str) -> P<'_, Expr> {
     let mut arms: Vec<MatchArm> = Vec::new();
     if let Ok((i2, _)) = ws(char(','))(i) {
         i = i2;
-        let (i3, a) =
-            nom::multi::separated_list1(ws(char(',')), ws(p_arm))(i)?;
+        let (i3, a) = nom::multi::separated_list1(ws(char(',')), ws(p_arm))(i)?;
         arms.extend(a);
         i = i3;
     }
@@ -321,10 +320,7 @@ fn p_unary(input: &str) -> P<'_, Expr> {
             expr: Box::new(e),
         }),
         map(
-            preceded(
-                ws(value((), alt((tag("not"), tag("!"))))),
-                p_unary,
-            ),
+            preceded(ws(value((), alt((tag("not"), tag("!"))))), p_unary),
             |e| Expr::Unary {
                 op: UnaryOp::Not,
                 expr: Box::new(e),
@@ -390,9 +386,21 @@ fn p_mul(input: &str) -> P<'_, Expr> {
         lhs,
         p_unary,
         &[
-            OpSpec { sym: "*", op: BinaryOp::Mul, keyword: false },
-            OpSpec { sym: "/", op: BinaryOp::Div, keyword: false },
-            OpSpec { sym: "%", op: BinaryOp::Mod, keyword: false },
+            OpSpec {
+                sym: "*",
+                op: BinaryOp::Mul,
+                keyword: false,
+            },
+            OpSpec {
+                sym: "/",
+                op: BinaryOp::Div,
+                keyword: false,
+            },
+            OpSpec {
+                sym: "%",
+                op: BinaryOp::Mod,
+                keyword: false,
+            },
         ],
     )
 }
@@ -404,8 +412,16 @@ fn p_add(input: &str) -> P<'_, Expr> {
         lhs,
         p_mul,
         &[
-            OpSpec { sym: "+", op: BinaryOp::Add, keyword: false },
-            OpSpec { sym: "-", op: BinaryOp::Sub, keyword: false },
+            OpSpec {
+                sym: "+",
+                op: BinaryOp::Add,
+                keyword: false,
+            },
+            OpSpec {
+                sym: "-",
+                op: BinaryOp::Sub,
+                keyword: false,
+            },
         ],
     )
 }
@@ -417,12 +433,36 @@ fn p_comp(input: &str) -> P<'_, Expr> {
         lhs,
         p_add,
         &[
-            OpSpec { sym: "==", op: BinaryOp::Eq, keyword: false },
-            OpSpec { sym: "!=", op: BinaryOp::Ne, keyword: false },
-            OpSpec { sym: "<=", op: BinaryOp::Le, keyword: false },
-            OpSpec { sym: ">=", op: BinaryOp::Ge, keyword: false },
-            OpSpec { sym: "<", op: BinaryOp::Lt, keyword: false },
-            OpSpec { sym: ">", op: BinaryOp::Gt, keyword: false },
+            OpSpec {
+                sym: "==",
+                op: BinaryOp::Eq,
+                keyword: false,
+            },
+            OpSpec {
+                sym: "!=",
+                op: BinaryOp::Ne,
+                keyword: false,
+            },
+            OpSpec {
+                sym: "<=",
+                op: BinaryOp::Le,
+                keyword: false,
+            },
+            OpSpec {
+                sym: ">=",
+                op: BinaryOp::Ge,
+                keyword: false,
+            },
+            OpSpec {
+                sym: "<",
+                op: BinaryOp::Lt,
+                keyword: false,
+            },
+            OpSpec {
+                sym: ">",
+                op: BinaryOp::Gt,
+                keyword: false,
+            },
         ],
     )
 }
@@ -434,8 +474,16 @@ fn p_and(input: &str) -> P<'_, Expr> {
         lhs,
         p_comp,
         &[
-            OpSpec { sym: "and", op: BinaryOp::And, keyword: true },
-            OpSpec { sym: "&&", op: BinaryOp::And, keyword: false },
+            OpSpec {
+                sym: "and",
+                op: BinaryOp::And,
+                keyword: true,
+            },
+            OpSpec {
+                sym: "&&",
+                op: BinaryOp::And,
+                keyword: false,
+            },
         ],
     )
 }
@@ -447,8 +495,16 @@ fn p_or(input: &str) -> P<'_, Expr> {
         lhs,
         p_and,
         &[
-            OpSpec { sym: "or", op: BinaryOp::Or, keyword: true },
-            OpSpec { sym: "||", op: BinaryOp::Or, keyword: false },
+            OpSpec {
+                sym: "or",
+                op: BinaryOp::Or,
+                keyword: true,
+            },
+            OpSpec {
+                sym: "||",
+                op: BinaryOp::Or,
+                keyword: false,
+            },
         ],
     )
 }
@@ -472,8 +528,14 @@ mod tests {
     #[test]
     fn literals() {
         assert_eq!(ok("42"), Expr::Literal(Literal::Number(42.0)));
-        assert_eq!(ok("3.14"), Expr::Literal(Literal::Number(3.14)));
-        assert_eq!(ok("-5"), Expr::Unary { op: UnaryOp::Neg, expr: Box::new(Expr::Literal(Literal::Number(5.0))) });
+        assert_eq!(ok("2.5"), Expr::Literal(Literal::Number(2.5)));
+        assert_eq!(
+            ok("-5"),
+            Expr::Unary {
+                op: UnaryOp::Neg,
+                expr: Box::new(Expr::Literal(Literal::Number(5.0)))
+            }
+        );
         assert_eq!(ok("\"hi\""), Expr::Literal(Literal::Text("hi".into())));
         assert_eq!(ok("true"), Expr::Literal(Literal::Boolean(true)));
     }
@@ -490,9 +552,19 @@ mod tests {
     fn precedence() {
         // 1 + 2 * 3 == 1 + (2*3)
         match ok("1 + 2 * 3") {
-            Expr::Binary { op: BinaryOp::Add, left, right } => {
+            Expr::Binary {
+                op: BinaryOp::Add,
+                left,
+                right,
+            } => {
                 assert_eq!(*left, Expr::Literal(Literal::Number(1.0)));
-                assert!(matches!(right.as_ref(), Expr::Binary { op: BinaryOp::Mul, .. }));
+                assert!(matches!(
+                    right.as_ref(),
+                    Expr::Binary {
+                        op: BinaryOp::Mul,
+                        ..
+                    }
+                ));
             }
             other => panic!("got {other:?}"),
         }
@@ -501,9 +573,19 @@ mod tests {
     #[test]
     fn power_right_assoc() {
         match ok("2 ^ 3 ^ 2") {
-            Expr::Binary { op: BinaryOp::Pow, left, right } => {
+            Expr::Binary {
+                op: BinaryOp::Pow,
+                left,
+                right,
+            } => {
                 assert_eq!(*left, Expr::Literal(Literal::Number(2.0)));
-                assert!(matches!(right.as_ref(), Expr::Binary { op: BinaryOp::Pow, .. }));
+                assert!(matches!(
+                    right.as_ref(),
+                    Expr::Binary {
+                        op: BinaryOp::Pow,
+                        ..
+                    }
+                ));
             }
             other => panic!("got {other:?}"),
         }
@@ -543,8 +625,18 @@ mod tests {
     #[test]
     fn casts() {
         match ok("NUMBER(\"5\") + 5") {
-            Expr::Binary { op: BinaryOp::Add, left, .. } => {
-                assert!(matches!(left.as_ref(), Expr::Cast { kind: CastKind::Number, .. }));
+            Expr::Binary {
+                op: BinaryOp::Add,
+                left,
+                ..
+            } => {
+                assert!(matches!(
+                    left.as_ref(),
+                    Expr::Cast {
+                        kind: CastKind::Number,
+                        ..
+                    }
+                ));
             }
             other => panic!("got {other:?}"),
         }

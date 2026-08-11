@@ -13,10 +13,11 @@ use crate::error::LatticeError;
 /// LES is strictly typed: there is no implicit coercion between variants.
 /// Attempting to add a [`CellValue::Text`] to a [`CellValue::Number`] produces a
 /// [`LatticeError::TypeError`] rather than a silent `10`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum CellValue {
     /// An empty / unset cell. Consumes no storage in a sparse grid.
+    #[default]
     Empty,
     /// An IEEE-754 finite number. Non-finite values (`NaN`, `inf`) are rejected
     /// by the evaluator and stored as errors instead.
@@ -84,12 +85,6 @@ impl CellValue {
     }
 }
 
-impl Default for CellValue {
-    fn default() -> Self {
-        CellValue::Empty
-    }
-}
-
 impl From<f64> for CellValue {
     fn from(n: f64) -> Self {
         CellValue::Number(n)
@@ -147,8 +142,14 @@ mod tests {
 
     #[test]
     fn sanitize_nonfinite() {
-        assert_eq!(CellValue::Number(f64::NAN).sanitize(), CellValue::Error(LatticeError::NotANumber));
-        assert_eq!(CellValue::Number(f64::INFINITY).sanitize(), CellValue::Error(LatticeError::NotANumber));
+        assert_eq!(
+            CellValue::Number(f64::NAN).sanitize(),
+            CellValue::Error(LatticeError::NotANumber)
+        );
+        assert_eq!(
+            CellValue::Number(f64::INFINITY).sanitize(),
+            CellValue::Error(LatticeError::NotANumber)
+        );
         assert_eq!(CellValue::Number(1.0).sanitize(), CellValue::Number(1.0));
     }
 

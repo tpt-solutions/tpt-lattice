@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TPT Lattice — WASM harness</title>
+    <style>
+      body { font: 14px/1.5 system-ui, sans-serif; margin: 2rem; max-width: 60ch; }
+      input { font: inherit; padding: 0.25rem 0.5rem; }
+      button { font: inherit; padding: 0.25rem 0.75rem; }
+      #log { white-space: pre-wrap; background: #111; color: #0f0; padding: 1rem; border-radius: 6px; margin-top: 1rem; min-height: 6rem; }
+      .row { display: flex; gap: 0.5rem; margin: 0.5rem 0; }
+    </style>
+  </head>
+  <body>
+    <h1>TPT Lattice — WASM harness</h1>
+    <p>
+      Drives the engine running inside a Web Worker. On load it runs a self-check
+      (<code>A1 = 21; B1 = =A1 * 2 → 42</code>) and prints the result below.
+    </p>
+
+    <div class="row">
+      <input id="cell" placeholder="A1" size="6" />
+      <input id="value" placeholder="=A1*2 or 42" size="16" />
+      <button id="set">Set cell</button>
+      <button id="get">Get cell</button>
+      <button id="eval">Evaluate</button>
+    </div>
+
+    <div id="log">booting…</div>
+
+    <!--
+      Serve over HTTP (ES modules + .wasm need an origin):
+        cd crates/tpt-lattice-wasm/www
+        python -m http.server 8080
+      then open http://localhost:8080/
+      The pkg/ directory must be built first:
+        wasm-pack build .. --target web --out-dir pkg
+    -->
+    <script>
+      const log = (s) => {
+        const el = document.getElementById("log");
+        el.textContent += s + "\n";
+      };
+
+      const worker = new Worker("worker.js", { type: "module" });
+      let seq = 0;
+      const pending = new Map();
+
+      worker.onmessage = (e) => {
+        const { id, ok, response, error } = e.data;
+        if (e.data.type === "ready") {
+          log("engine ready");
+          selfCheck();
+          return;
+        }
+        const resolver = pending.get(id);
+        pending.delete(id);
+        if (ok) {
+          log("← " + JSON.stringify(response));
+        } else {
+          log("✗ " + error);
+        }
+        resolver && resolver();
+      };
+
+      function send(req) {
+        const id = ++seq;
+        return new Promise((resolve) => {
+          pending.set(id, resolve);
+          worker.postMessage({ ...req, id });
+        });
+      }
+
+      async function selfCheck() {
+        await send({ type: "SetCell", cell: "A1", value: { Number: 21 } });
+        await send({ type: "SetFormula", cell: "B1", formula: "=A1 * 2" });
+        await send({ type: "Evaluate" });
+        const res = await send({ type: "GetCell", cell: "B1" });
+        const ok = res && res.response && res.response.value
+          && res.response.value.Number === 42;
+        log(ok ? "self-check PASSED (B1 == 42)" : "self-check FAILED");
+      }
+
+      document.getElementById("set").onclick = async () => {
+        const cell = document.getElementById("cell").value.trim();
+        const raw = document.getElementById("value").value.trim();
+        if (!cell || !raw) return;
+        if (raw.startsWith("=")) {
+          await send({ type: "SetFormula", cell, formula: raw });
+        } else {
+          const num = Number(raw);
+          const value = Number.isNaN(num) ? { Text: raw } : { Number: num };
+          await send({ type: "SetCell", cell, value });
+        }
+        await send({ type: "Evaluate" });
+      };
+      document.getElementById("get").onclick = async () => {
+        const cell = document.getElementById("cell").value.trim();
+        if (cell) await send({ type: "GetCell", cell });
+      };
+      document.getElementById("eval").onclick = () => send({ type: "Evaluate" });
+    </script>
+  </body>
+</html>

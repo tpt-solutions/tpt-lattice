@@ -48,8 +48,8 @@ pub struct ImportedSheet {
 
 /// Import the **first** worksheet of an `.xlsx` workbook.
 pub fn import_first_sheet(bytes: &[u8]) -> Result<ImportedSheet, ImportError> {
-    let workbook = Xlsx::new(Cursor::new(bytes.to_vec()))
-        .map_err(|e| ImportError::Calamine(e.to_string()))?;
+    let workbook =
+        Xlsx::new(Cursor::new(bytes.to_vec())).map_err(|e| ImportError::Calamine(e.to_string()))?;
     let name = workbook
         .sheet_names()
         .first()
@@ -60,32 +60,42 @@ pub fn import_first_sheet(bytes: &[u8]) -> Result<ImportedSheet, ImportError> {
 
 /// Import a specific worksheet by name.
 pub fn import_sheet(bytes: &[u8], sheet_name: &str) -> Result<ImportedSheet, ImportError> {
-    let mut workbook = Xlsx::new(Cursor::new(bytes.to_vec()))
-        .map_err(|e| ImportError::Calamine(e.to_string()))?;
+    let mut workbook =
+        Xlsx::new(Cursor::new(bytes.to_vec())).map_err(|e| ImportError::Calamine(e.to_string()))?;
     let range = workbook
         .worksheet_range(sheet_name)
         .map_err(|e| ImportError::Calamine(e.to_string()))?;
-    let formulas = workbook.worksheet_formula(sheet_name).ok();
 
+    // The formula range is indexed *relative to its own top-left*, which is not
+    // necessarily A1. Build an absolute-coordinate map so lookups line up with
+    // the data range below.
+    let mut formulas_by_cell: BTreeMap<(usize, usize), String> = BTreeMap::new();
+    if let Ok(fr) = workbook.worksheet_formula(sheet_name) {
+        let (fsr, fsc) = fr.start().unwrap_or((0, 0));
+        for (r, frow) in fr.rows().enumerate() {
+            for (c, formula) in frow.iter().enumerate() {
+                if !formula.is_empty() {
+                    formulas_by_cell.insert((fsr as usize + r, fsc as usize + c), formula.clone());
+                }
+            }
+        }
+    }
+
+    let (dsr, dsc) = range.start().unwrap_or((0, 0));
     let mut sheet = ImportedSheet::default();
 
     for (i, row) in range.rows().enumerate() {
         for (j, cell) in row.iter().enumerate() {
-            let id = CellId::from_rc(j as u64, i as u64);
+            // Absolute (row, col) in the sheet for this data cell.
+            let abs = (dsr as usize + i, dsc as usize + j);
+            let id = CellId::from_rc(abs.1 as u64, abs.0 as u64);
             let value = map_cell(cell);
 
             // If Excel stored a formula for this cell, LES cannot represent it
             // faithfully yet, so surface it as an explicit error value.
-            let has_formula = formulas
-                .as_ref()
-                .and_then(|f| f.get((i, j)))
-                .map(|d| !d.is_empty())
-                .unwrap_or(false);
-
-            let value = if has_formula {
-                CellValue::Error(LatticeError::unsupported(cell_to_text(cell)))
-            } else {
-                value
+            let value = match formulas_by_cell.get(&abs) {
+                Some(formula) => CellValue::Error(LatticeError::unsupported(format!("={formula}"))),
+                None => value,
             };
 
             if !value.is_empty() {
@@ -118,13 +128,6 @@ fn map_cell(data: &Data) -> CellValue {
         Data::DurationIso(s) => CellValue::Text(s.clone()),
         Data::Error(e) => CellValue::Error(LatticeError::ref_error(e.to_string())),
         Data::Empty => CellValue::Empty,
-    }
-}
-
-fn cell_to_text(data: &Data) -> String {
-    match data {
-        Data::String(s) => s.clone(),
-        other => other.to_string(),
     }
 }
 

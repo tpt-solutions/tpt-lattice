@@ -353,11 +353,11 @@ mod tests {
         let mut peer_a = CrdtStore::new(1);
         let mut peer_b = CrdtStore::new(2);
 
-        let ops_a = vec![
+        let ops_a = [
             peer_a.set_cell(CellId::from_a1("A1"), CellValue::Number(10.0)),
             peer_a.set_cell(CellId::from_a1("A2"), CellValue::Number(20.0)),
         ];
-        let ops_b = vec![
+        let ops_b = [
             peer_b.set_cell(CellId::from_a1("B1"), CellValue::Text("x".into())),
             peer_b.set_cell(CellId::from_a1("A1"), CellValue::Number(999.0)), // concurrent edit on A1
         ];
@@ -367,11 +367,23 @@ mod tests {
         peer_b.merge_ops(ops_a.iter().cloned());
 
         // Both must converge to identical state.
-        assert_eq!(peer_a.get_cell(CellId::from_a1("A1")), peer_b.get_cell(CellId::from_a1("A1")));
-        assert_eq!(peer_a.get_cell(CellId::from_a1("A2")), peer_b.get_cell(CellId::from_a1("A2")));
-        assert_eq!(peer_a.get_cell(CellId::from_a1("B1")), peer_b.get_cell(CellId::from_a1("B1")));
+        assert_eq!(
+            peer_a.get_cell(CellId::from_a1("A1")),
+            peer_b.get_cell(CellId::from_a1("A1"))
+        );
+        assert_eq!(
+            peer_a.get_cell(CellId::from_a1("A2")),
+            peer_b.get_cell(CellId::from_a1("A2"))
+        );
+        assert_eq!(
+            peer_a.get_cell(CellId::from_a1("B1")),
+            peer_b.get_cell(CellId::from_a1("B1"))
+        );
         // A1 conflict resolves identically: higher actor (2) wins deterministically.
-        assert_eq!(peer_a.get_cell(CellId::from_a1("A1")), CellValue::Number(999.0));
+        assert_eq!(
+            peer_a.get_cell(CellId::from_a1("A1")),
+            CellValue::Number(999.0)
+        );
     }
 
     #[test]

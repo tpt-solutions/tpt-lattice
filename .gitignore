@@ -5,6 +5,7 @@ Cargo.lock
 
 # Wasm build artifacts
 /pkg
+crates/tpt-lattice-wasm/pkg/
 /dist
 *.wasm
 *.wat

@@ -107,7 +107,9 @@ mod tests {
     #[test]
     fn display_formats() {
         assert_eq!(LatticeError::DivByZero.to_string(), "division by zero");
-        assert!(LatticeError::type_error("Number", "Text").to_string().contains("expected Number"));
+        assert!(LatticeError::type_error("Number", "Text")
+            .to_string()
+            .contains("expected Number"));
         assert!(LatticeError::name_error("FOO").to_string().contains("FOO"));
     }
 

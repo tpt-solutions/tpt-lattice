@@ -267,7 +267,8 @@ mod tests {
     fn match_error_handling() {
         let mut e = Evaluator::new();
         e.set_value(cell("A1"), CellValue::Number(7.0));
-        e.set_formula(cell("B1"), "=MATCH(A1, Ok(v) => v * 2, Err(e) => 0)").unwrap();
+        e.set_formula(cell("B1"), "=MATCH(A1, Ok(v) => v * 2, Err(e) => 0)")
+            .unwrap();
         e.evaluate().unwrap();
         assert_eq!(e.get_value(cell("B1")), CellValue::Number(14.0));
     }
@@ -277,7 +278,10 @@ mod tests {
         let mut e = Evaluator::new();
         e.set_formula(cell("A1"), "=1 / 0").unwrap();
         e.evaluate().unwrap();
-        assert_eq!(e.get_value(cell("A1")), CellValue::Error(LatticeError::DivByZero));
+        assert_eq!(
+            e.get_value(cell("A1")),
+            CellValue::Error(LatticeError::DivByZero)
+        );
     }
 
     #[test]
