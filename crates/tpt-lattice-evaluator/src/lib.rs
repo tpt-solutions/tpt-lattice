@@ -18,7 +18,7 @@
 use std::collections::{HashMap, HashSet};
 
 use tpt_lattice_core::{CellId, CellValue, GridState, LatticeError};
-use tpt_lattice_parser::ast::{CellRef, Expr, Formula};
+use tpt_lattice_parser::ast::{Expr, Formula};
 use tpt_lattice_parser::parse as parse_formula;
 
 mod dag;
@@ -49,7 +49,7 @@ fn collect_deps(expr: &Expr, out: &mut Vec<CellId>) -> Result<(), LatticeError> 
                 out.push(c.id);
             }
         }
-        Expr::Range { start, end } => expand_range(start, end, out)?,
+        Expr::Range { start, end } => crate::dag::expand_range(start, end, out)?,
         Expr::Unary { expr, .. } => collect_deps(expr, out)?,
         Expr::Binary { left, right, .. } => {
             collect_deps(left, out)?;
@@ -68,28 +68,6 @@ fn collect_deps(expr: &Expr, out: &mut Vec<CellId>) -> Result<(), LatticeError> 
             }
         }
         Expr::Literal(_) | Expr::Name(_) => {}
-    }
-    Ok(())
-}
-
-/// Expand a range rectangle into `out` (row-major), capped.
-fn expand_range(start: &CellRef, end: &CellRef, out: &mut Vec<CellId>) -> Result<(), LatticeError> {
-    let (sc, sr) = start.id.to_rc();
-    let (ec, er) = end.id.to_rc();
-    let (c0, c1) = (sc.min(ec), sc.max(ec));
-    let (r0, r1) = (sr.min(er), sr.max(er));
-    // Compute the cell count in u128 so a wide column×row span can never
-    // overflow (u64/usize) and silently bypass MAX_RANGE_CELLS (especially
-    // dangerous on wasm32, where usize is 32-bit).
-    let cols = (c1 - c0 + 1) as u128;
-    let rows = (r1 - r0 + 1) as u128;
-    if cols * rows > MAX_RANGE_CELLS as u128 {
-        return Err(LatticeError::argument_error("RANGE spans too many cells"));
-    }
-    for row in r0..=r1 {
-        for col in c0..=c1 {
-            out.push(CellId::from_rc(col, row));
-        }
     }
     Ok(())
 }
@@ -350,5 +328,243 @@ mod tests {
         assert!(e.dirty.contains(&cell("A2")));
         e.evaluate().unwrap();
         assert_eq!(e.get_value(cell("A2")), CellValue::Number(12.0));
+    }
+}
+
+#[cfg(test)]
+mod phase8_tests {
+    use super::*;
+
+    fn cell(s: &str) -> CellId {
+        CellId::from_a1(s)
+    }
+
+    fn text(s: &str) -> CellValue {
+        CellValue::Text(s.to_string())
+    }
+
+    /// Build a 3x3 table:
+    ///   A1=1   B1="a"  C1=10
+    ///   A2=2   B2="b"  C2=20
+    ///   A3=3   B3="c"  C3=30
+    fn table(e: &mut Evaluator) {
+        e.set_value(cell("A1"), CellValue::Number(1.0));
+        e.set_value(cell("B1"), text("a"));
+        e.set_value(cell("C1"), CellValue::Number(10.0));
+        e.set_value(cell("A2"), CellValue::Number(2.0));
+        e.set_value(cell("B2"), text("b"));
+        e.set_value(cell("C2"), CellValue::Number(20.0));
+        e.set_value(cell("A3"), CellValue::Number(3.0));
+        e.set_value(cell("B3"), text("c"));
+        e.set_value(cell("C3"), CellValue::Number(30.0));
+    }
+
+    #[test]
+    fn concat_operator() {
+        let mut e = Evaluator::new();
+        e.set_value(cell("A1"), text("Hello"));
+        e.set_value(cell("A2"), text("World"));
+        e.set_formula(cell("A3"), "=A1 & \" \" & A2").unwrap();
+        e.evaluate().unwrap();
+        assert_eq!(e.get_value(cell("A3")), text("Hello World"));
+        // numbers coerce to text
+        e.set_value(cell("A1"), CellValue::Number(2.0));
+        e.set_formula(cell("A3"), "=A1 & A1").unwrap();
+        e.evaluate().unwrap();
+        assert_eq!(e.get_value(cell("A3")), text("22"));
+    }
+
+    #[test]
+    fn string_functions() {
+        let mut e = Evaluator::new();
+        e.set_value(cell("A1"), text("  HeLLo  "));
+        e.set_formula(cell("B1"), "=UPPER(A1)").unwrap();
+        e.set_formula(cell("B2"), "=LOWER(A1)").unwrap();
+        e.set_formula(cell("B3"), "=TRIM(A1)").unwrap();
+        e.set_formula(cell("B4"), "=LEN(A1)").unwrap();
+        e.evaluate().unwrap();
+        assert_eq!(e.get_value(cell("B1")), text("  HELLO  "));
+        assert_eq!(e.get_value(cell("B2")), text("  hello  "));
+        assert_eq!(e.get_value(cell("B3")), text("HeLLo"));
+        assert_eq!(e.get_value(cell("B4")), CellValue::Number(9.0));
+    }
+
+    #[test]
+    fn left_right_mid() {
+        let mut e = Evaluator::new();
+        e.set_value(cell("A1"), text("Hello"));
+        e.set_formula(cell("B1"), "=LEFT(A1, 2)").unwrap();
+        e.set_formula(cell("B2"), "=RIGHT(A1, 2)").unwrap();
+        e.set_formula(cell("B3"), "=MID(A1, 2, 3)").unwrap();
+        e.set_formula(cell("B4"), "=LEFT(A1)").unwrap();
+        e.evaluate().unwrap();
+        assert_eq!(e.get_value(cell("B1")), text("He"));
+        assert_eq!(e.get_value(cell("B2")), text("lo"));
+        assert_eq!(e.get_value(cell("B3")), text("ell"));
+        assert_eq!(e.get_value(cell("B4")), text("H"));
+    }
+
+    #[test]
+    fn find_substitute_replace() {
+        let mut e = Evaluator::new();
+        e.set_value(cell("A1"), text("Hello World"));
+        e.set_formula(cell("B1"), "=FIND(\"World\", A1)").unwrap();
+        e.set_formula(cell("B2"), "=SUBSTITUTE(A1, \"World\", \"LES\")").unwrap();
+        e.set_formula(cell("B3"), "=REPLACE(A1, 1, 5, \"Hi\")").unwrap();
+        e.evaluate().unwrap();
+        assert_eq!(e.get_value(cell("B1")), CellValue::Number(7.0));
+        assert_eq!(e.get_value(cell("B2")), text("Hello LES"));
+        assert_eq!(e.get_value(cell("B3")), text("Hi World"));
+    }
+
+    #[test]
+    fn find_not_found_is_na() {
+        let mut e = Evaluator::new();
+        e.set_value(cell("A1"), text("abc"));
+        e.set_formula(cell("B1"), "=FIND(\"z\", A1)").unwrap();
+        e.evaluate().unwrap();
+        assert_eq!(e.get_value(cell("B1")), CellValue::Error(LatticeError::NA));
+    }
+
+    #[test]
+    fn predicates() {
+        let mut e = Evaluator::new();
+        e.set_value(cell("A1"), CellValue::Empty);
+        e.set_value(cell("A2"), CellValue::Number(1.0));
+        e.set_value(cell("A3"), text("x"));
+        e.set_value(cell("A4"), CellValue::Error(LatticeError::NA));
+        e.set_formula(cell("B1"), "=ISBLANK(A1)").unwrap();
+        e.set_formula(cell("B2"), "=ISNUMBER(A2)").unwrap();
+        e.set_formula(cell("B3"), "=ISTEXT(A3)").unwrap();
+        e.set_formula(cell("B4"), "=ISERROR(A4)").unwrap();
+        e.set_formula(cell("B5"), "=ISNA(A4)").unwrap();
+        e.evaluate().unwrap();
+        assert_eq!(e.get_value(cell("B1")), CellValue::Boolean(true));
+        assert_eq!(e.get_value(cell("B2")), CellValue::Boolean(true));
+        assert_eq!(e.get_value(cell("B3")), CellValue::Boolean(true));
+        assert_eq!(e.get_value(cell("B4")), CellValue::Boolean(true));
+        assert_eq!(e.get_value(cell("B5")), CellValue::Boolean(true));
+    }
+
+    #[test]
+    fn iferror_ifna_two_arg_if() {
+        let mut e = Evaluator::new();
+        e.set_value(cell("A1"), CellValue::Error(LatticeError::DivByZero));
+        e.set_formula(cell("B1"), "=IFERROR(A1, 0)").unwrap();
+        e.set_formula(cell("B2"), "=IFNA(A1, 99)").unwrap(); // not NA -> passes error through
+        e.set_formula(cell("B3"), "=IFERROR(1/0, -1)").unwrap();
+        e.set_formula(cell("B4"), "=IF(1 > 0, \"yes\")").unwrap(); // 2-arg IF
+        e.evaluate().unwrap();
+        assert_eq!(e.get_value(cell("B1")), CellValue::Number(0.0));
+        assert!(e.get_value(cell("B2")).is_error());
+        assert_eq!(e.get_value(cell("B3")), CellValue::Number(-1.0));
+        assert_eq!(e.get_value(cell("B4")), text("yes"));
+    }
+
+    #[test]
+    fn conditional_aggregates() {
+        let mut e = Evaluator::new();
+        for (c, v) in [("A1", 1.0), ("A2", 5.0), ("A3", 10.0), ("A4", 5.0)] {
+            e.set_value(cell(c), CellValue::Number(v));
+        }
+        e.set_value(cell("B1"), text("low"));
+        e.set_value(cell("B2"), text("high"));
+        e.set_value(cell("B3"), text("high"));
+        e.set_value(cell("B4"), text("low"));
+        e.set_formula(cell("C1"), "=COUNTIF(RANGE(A1, A4), \">4\")").unwrap();
+        e.set_formula(cell("C2"), "=SUMIF(RANGE(A1, A4), \">4\")").unwrap();
+        e.set_formula(cell("C3"), "=SUMIF(RANGE(B1, B4), \"high\", RANGE(A1, A4))").unwrap();
+        e.set_formula(cell("C4"), "=AVERAGEIF(RANGE(B1, B4), \"high\", RANGE(A1, A4))").unwrap();
+        e.set_formula(
+            cell("C5"),
+            "=SUMIFS(RANGE(A1, A4), RANGE(A1, A4), \">4\", RANGE(B1, B4), \"high\")",
+        )
+        .unwrap();
+        e.evaluate().unwrap();
+        assert_eq!(e.get_value(cell("C1")), CellValue::Number(3.0));
+        assert_eq!(e.get_value(cell("C2")), CellValue::Number(20.0));
+        assert_eq!(e.get_value(cell("C3")), CellValue::Number(15.0));
+        assert_eq!(e.get_value(cell("C4")), CellValue::Number(7.5));
+        assert_eq!(e.get_value(cell("C5")), CellValue::Number(15.0));
+    }
+
+    #[test]
+    fn lookups() {
+        let mut e = Evaluator::new();
+        table(&mut e);
+        e.set_formula(cell("D1"), "=VLOOKUP(2, RANGE(A1, C3), 3)").unwrap();
+        e.set_formula(cell("D2"), "=VLOOKUP(5, RANGE(A1, C3), 3)").unwrap(); // not found
+        e.evaluate().unwrap();
+        assert_eq!(e.get_value(cell("D1")), CellValue::Number(20.0));
+        assert_eq!(e.get_value(cell("D2")), CellValue::Error(LatticeError::NA));
+
+        let mut e2 = Evaluator::new();
+        table(&mut e2);
+        e2.set_formula(cell("D1"), "=INDEX(RANGE(A1, C3), 2, 3)").unwrap();
+        e2.set_formula(cell("D2"), "=INDEX(RANGE(A1, C3), 2, 2)").unwrap();
+        e2.set_formula(cell("D3"), "=XLOOKUP(2, RANGE(A1, A3), RANGE(C1, C3))").unwrap();
+        e2.evaluate().unwrap();
+        assert_eq!(e2.get_value(cell("D1")), CellValue::Number(20.0));
+        assert_eq!(e2.get_value(cell("D2")), text("b"));
+        assert_eq!(e2.get_value(cell("D3")), CellValue::Number(20.0));
+
+        // HLOOKUP: header row 1, values row 2
+        let mut e3 = Evaluator::new();
+        e3.set_value(cell("A1"), CellValue::Number(1.0));
+        e3.set_value(cell("B1"), CellValue::Number(2.0));
+        e3.set_value(cell("C1"), CellValue::Number(3.0));
+        e3.set_value(cell("A2"), CellValue::Number(10.0));
+        e3.set_value(cell("B2"), CellValue::Number(20.0));
+        e3.set_value(cell("C2"), CellValue::Number(30.0));
+        e3.set_formula(cell("D1"), "=HLOOKUP(2, RANGE(A1, C2), 2)").unwrap();
+        e3.evaluate().unwrap();
+        assert_eq!(e3.get_value(cell("D1")), CellValue::Number(20.0));
+    }
+
+    #[test]
+    fn statistics() {
+        let mut e = Evaluator::new();
+        for (c, v) in [("A1", 1.0), ("A2", 2.0), ("A3", 3.0), ("A4", 4.0)] {
+            e.set_value(cell(c), CellValue::Number(v));
+        }
+        e.set_formula(cell("B1"), "=MEDIAN(RANGE(A1, A4))").unwrap();
+        e.set_formula(cell("B2"), "=VAR(RANGE(A1, A4))").unwrap();
+        e.set_formula(cell("B3"), "=STDEV(RANGE(A1, A4))").unwrap();
+        e.set_formula(cell("B4"), "=RANK(3, RANGE(A1, A4))").unwrap();
+        e.set_formula(cell("B5"), "=PERCENTILE(RANGE(A1, A4), 0.5)").unwrap();
+        e.evaluate().unwrap();
+        assert_eq!(e.get_value(cell("B1")), CellValue::Number(2.5));
+        // sample variance of 1..4 = ((1-2.5)^2+(2-2.5)^2+(3-2.5)^2+(4-2.5)^2)/3 = 1.6666..
+        assert!((e.get_value(cell("B2")).as_number().unwrap() - 5.0 / 3.0).abs() < 1e-9);
+        assert!((e.get_value(cell("B3")).as_number().unwrap() - (5.0f64 / 3.0).sqrt()).abs() < 1e-9);
+        assert_eq!(e.get_value(cell("B4")), CellValue::Number(2.0));
+        assert_eq!(e.get_value(cell("B5")), CellValue::Number(2.5));
+    }
+
+    #[test]
+    fn mode_and_na() {
+        let mut e = Evaluator::new();
+        for (c, v) in [("A1", 1.0), ("A2", 2.0), ("A3", 2.0), ("A4", 3.0)] {
+            e.set_value(cell(c), CellValue::Number(v));
+        }
+        e.set_formula(cell("B1"), "=MODE(RANGE(A1, A4))").unwrap();
+        e.evaluate().unwrap();
+        assert_eq!(e.get_value(cell("B1")), CellValue::Number(2.0));
+
+        let mut e2 = Evaluator::new();
+        for (c, v) in [("A1", 1.0), ("A2", 2.0), ("A3", 3.0)] {
+            e2.set_value(cell(c), CellValue::Number(v));
+        }
+        e2.set_formula(cell("B1"), "=MODE(RANGE(A1, A3))").unwrap(); // no duplicate
+        e2.evaluate().unwrap();
+        assert_eq!(e2.get_value(cell("B1")), CellValue::Error(LatticeError::NA));
+    }
+
+    #[test]
+    fn range_outside_function_errors_clearly() {
+        let mut e = Evaluator::new();
+        e.set_formula(cell("A1"), "=RANGE(B1, C2)").unwrap();
+        e.evaluate().unwrap();
+        assert!(e.get_value(cell("A1")).is_error());
     }
 }

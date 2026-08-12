@@ -22,6 +22,7 @@ use nom::branch::alt;
 use nom::bytes::complete::tag;
 use nom::character::complete::{alphanumeric1, anychar, char, digit1, multispace0, one_of};
 use nom::combinator::{map, not, opt, recognize, value};
+use nom::multi::many1;
 use nom::error::{Error as NomError, ErrorKind};
 use nom::sequence::{delimited, preceded, terminated, tuple};
 use nom::IResult;
@@ -144,6 +145,11 @@ fn alpha(input: &str) -> P<'_, char> {
 }
 
 fn p_atom_ident(input: &str) -> P<'_, Expr> {
+    // Try an (optionally absolute, `$A$1`) cell reference first. On failure it
+    // backtracks to the original input, so the name/false/true branches below run.
+    if let Ok((rest, expr)) = p_cellref(input) {
+        return Ok((rest, expr));
+    }
     let (input, name) = ident(input)?;
     if name.eq_ignore_ascii_case("true") {
         return Ok((input, Expr::Literal(Literal::Boolean(true))));
@@ -157,9 +163,43 @@ fn p_atom_ident(input: &str) -> P<'_, Expr> {
             Expr::CellRef(CellRef {
                 id,
                 a1: name.clone(),
+                abs_col: false,
+                abs_row: false,
             }),
         )),
         Err(_) => Ok((input, Expr::Name(name))),
+    }
+}
+
+/// Parse an A1 cell reference with optional `$` absolute markers: `$A$1`, `A$1`,
+/// `$A1`, or `A1`. Returns [`Expr::CellRef`] with the absolute flags recorded.
+fn p_cellref(input: &str) -> P<'_, Expr> {
+    let (rest, abs_col) = opt(tag("$"))(input)?;
+    let abs_col = abs_col.is_some();
+    let (rest, col) = recognize(many1(one_of(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    )))(rest)?;
+    let (rest, abs_row) = opt(tag("$"))(rest)?;
+    let abs_row = abs_row.is_some();
+    let (rest, row) = digit1(rest)?;
+    let a1 = format!(
+        "{}{}{}{}",
+        if abs_col { "$" } else { "" },
+        col,
+        if abs_row { "$" } else { "" },
+        row
+    );
+    match CellId::try_from_a1(&a1) {
+        Ok(id) => Ok((
+            rest,
+            Expr::CellRef(CellRef {
+                id,
+                a1,
+                abs_col,
+                abs_row,
+            }),
+        )),
+        Err(_) => fail(rest, "invalid cell reference"),
     }
 }
 
@@ -426,12 +466,26 @@ fn p_add(input: &str) -> P<'_, Expr> {
     )
 }
 
-fn p_comp(input: &str) -> P<'_, Expr> {
+fn p_concat(input: &str) -> P<'_, Expr> {
     let (input, lhs) = p_add(input)?;
     fold_op(
         input,
         lhs,
         p_add,
+        &[OpSpec {
+            sym: "&",
+            op: BinaryOp::Concat,
+            keyword: false,
+        }],
+    )
+}
+
+fn p_comp(input: &str) -> P<'_, Expr> {
+    let (input, lhs) = p_concat(input)?;
+    fold_op(
+        input,
+        lhs,
+        p_concat,
         &[
             OpSpec {
                 sym: "==",
@@ -668,6 +722,8 @@ mod tests {
             "NUMBER(\"5\") + 5",
             "-2 ^ 3",
             "A1 and not B2",
+            "A1 & \"x\"",
+            "A1 & B1 & C1",
         ] {
             let e = ok(src);
             let printed = e.to_string();

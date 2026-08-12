@@ -2,10 +2,8 @@
 
 use std::collections::HashMap;
 
-use tpt_lattice_core::{CellId, CellValue, GridState, LatticeError};
-use tpt_lattice_parser::ast::{BinaryOp, CastKind, CellRef, Expr, Literal, MatchPattern, UnaryOp};
-
-use crate::dag::MAX_RANGE_CELLS;
+use tpt_lattice_core::{format_serial_date, serial_from_ymd, CellId, CellValue, GridState, LatticeError};
+use tpt_lattice_parser::ast::{BinaryOp, CastKind, Expr, Literal, MatchPattern, UnaryOp};
 
 /// Evaluate a formula expression against `grid`, resolving `MATCH` bindings via
 /// `env`. Reads of other cells go through `grid` (so the evaluator is agnostic
@@ -30,8 +28,8 @@ pub fn eval_expr(
         Expr::Unary { op, expr } => eval_unary(*op, expr, grid, env),
         Expr::Binary { op, left, right } => eval_binary(*op, left, right, grid, env),
         Expr::Call { name, args } => call_function(name, args, grid, env),
-        Expr::Range { .. } => CellValue::Error(LatticeError::internal(
-            "RANGE used outside of a function argument",
+        Expr::Range { .. } => CellValue::Error(LatticeError::argument_error(
+            "RANGE must be passed as an argument to a function (e.g. SUM, INDEX, VLOOKUP)",
         )),
         Expr::Cast { kind, expr } => eval_cast(*kind, expr, grid, env),
         Expr::Match { scrutinee, arms } => eval_match(scrutinee, arms, grid, env),
@@ -90,8 +88,14 @@ fn eval_binary(
 fn eval_binary_values(op: BinaryOp, l: CellValue, r: CellValue) -> CellValue {
     use CellValue::*;
     match op {
-        BinaryOp::Add => arith(l, r, |a, b| a + b),
-        BinaryOp::Sub => arith(l, r, |a, b| a - b),
+        BinaryOp::Add => match eval_date_binary(BinaryOp::Add, &l, &r) {
+            Some(v) => v,
+            None => arith(l, r, |a, b| a + b),
+        },
+        BinaryOp::Sub => match eval_date_binary(BinaryOp::Sub, &l, &r) {
+            Some(v) => v,
+            None => arith(l, r, |a, b| a - b),
+        },
         BinaryOp::Mul => arith(l, r, |a, b| a * b),
         BinaryOp::Div => {
             if let (Number(a), Number(b)) = (&l, &r) {
@@ -120,6 +124,19 @@ fn eval_binary_values(op: BinaryOp, l: CellValue, r: CellValue) -> CellValue {
         BinaryOp::Ge => cmp(l, r, |o| o != std::cmp::Ordering::Less),
         BinaryOp::And => logical(l, r, |a, b| a && b),
         BinaryOp::Or => logical(l, r, |a, b| a || b),
+        BinaryOp::Concat => concat_values(l, r),
+    }
+}
+
+fn eval_date_binary(op: BinaryOp, l: &CellValue, r: &CellValue) -> Option<CellValue> {
+    use CellValue::*;
+    match (l, r) {
+        (Date(a), Date(b)) if matches!(op, BinaryOp::Sub) => Some(Number(a - b)),
+        (Date(a), Number(b)) if matches!(op, BinaryOp::Add | BinaryOp::Sub) => Some(Date(
+            if matches!(op, BinaryOp::Add) { a + b } else { a - b },
+        )),
+        (Number(a), Date(b)) if matches!(op, BinaryOp::Add) => Some(Date(a + b)),
+        _ => None,
     }
 }
 
@@ -147,6 +164,9 @@ fn cmp<F: Fn(std::cmp::Ordering) -> bool>(l: CellValue, r: CellValue, pred: F) -
         }
         (CellValue::Text(a), CellValue::Text(b)) => bool_of(pred(a.cmp(b))),
         (CellValue::Boolean(a), CellValue::Boolean(b)) => bool_of(pred(a.cmp(b))),
+        (CellValue::Date(a), CellValue::Date(b)) => {
+            bool_of(pred(a.partial_cmp(b).unwrap_or(Ordering::Equal)))
+        }
         (CellValue::Error(e), _) | (_, CellValue::Error(e)) => CellValue::Error(e.clone()),
         _ => CellValue::Error(LatticeError::type_error(
             "comparable values",
@@ -172,6 +192,8 @@ fn variant_name(v: &CellValue) -> &'static str {
         CellValue::Number(_) => "Number",
         CellValue::Text(_) => "Text",
         CellValue::Boolean(_) => "Boolean",
+        CellValue::Date(_) => "Date",
+        CellValue::List(_) => "List",
         CellValue::Error(_) => "Error",
     }
 }
@@ -302,30 +324,52 @@ fn call_function(
         "NUMBER" => eval_cast(CastKind::Number, &args[0], grid, env),
         "TEXT" => eval_cast(CastKind::Text, &args[0], grid, env),
         "BOOLEAN" => eval_cast(CastKind::Boolean, &args[0], grid, env),
+        // --- Predicates -----------------------------------------------------
+        "ISBLANK" => predicate(args, grid, env, |v| v.is_empty()),
+        "ISERROR" => predicate(args, grid, env, |v| v.is_error()),
+        "ISNUMBER" => predicate(args, grid, env, |v| matches!(v, CellValue::Number(_))),
+        "ISTEXT" => predicate(args, grid, env, |v| matches!(v, CellValue::Text(_))),
+        "ISNA" => predicate(args, grid, env, |v| {
+            matches!(v, CellValue::Error(LatticeError::NA))
+        }),
+        // --- Error handling wrappers ----------------------------------------
+        "IFERROR" => iferror_fn(args, grid, env),
+        "IFNA" => ifna_fn(args, grid, env),
+        // --- String functions ----------------------------------------------
+        "UPPER" => text_transform(args, grid, env, |s| s.to_uppercase(), "UPPER"),
+        "LOWER" => text_transform(args, grid, env, |s| s.to_lowercase(), "LOWER"),
+        "TRIM" => text_transform(
+            args,
+            grid,
+            env,
+            |s| s.split_whitespace().collect::<Vec<_>>().join(" "),
+            "TRIM",
+        ),
+        "LEFT" => left_right(args, grid, env, true),
+        "RIGHT" => left_right(args, grid, env, false),
+        "MID" => mid(args, grid, env),
+        "FIND" => find(args, grid, env),
+        "SUBSTITUTE" => substitute(args, grid, env),
+        "REPLACE" => replace(args, grid, env),
+        // --- Conditional aggregates -----------------------------------------
+        "COUNTIF" => countif(args, grid, env),
+        "SUMIF" => sumif(args, grid, env),
+        "AVERAGEIF" => averageif(args, grid, env),
+        "SUMIFS" => sumifs(args, grid, env),
+        // --- Lookups --------------------------------------------------------
+        "VLOOKUP" => vlookup(args, grid, env, false),
+        "HLOOKUP" => vlookup(args, grid, env, true),
+        "INDEX" => index_fn(args, grid, env),
+        "XLOOKUP" => xlookup(args, grid, env),
+        // --- Statistics -----------------------------------------------------
+        "MEDIAN" => median(args, grid, env),
+        "VAR" => sample_var(args, grid, env),
+        "STDEV" => stdev(args, grid, env),
+        "MODE" => mode_fn(args, grid, env),
+        "RANK" => rank_fn(args, grid, env),
+        "PERCENTILE" => percentile(args, grid, env),
         other => CellValue::Error(LatticeError::name_error(other)),
     }
-}
-
-/// Expand a `RANGE(start, end)` into the cell ids it covers (row-major).
-fn expand_range(start: &CellRef, end: &CellRef, out: &mut Vec<CellId>) -> Result<(), LatticeError> {
-    let (sc, sr) = start.id.to_rc();
-    let (ec, er) = end.id.to_rc();
-    let (c0, c1) = (sc.min(ec), sc.max(ec));
-    let (r0, r1) = (sr.min(er), sr.max(er));
-    // Compute the cell count in u128 so a wide column×row span can never
-    // overflow (u64/usize) and silently bypass MAX_RANGE_CELLS (especially
-    // dangerous on wasm32, where usize is 32-bit).
-    let cols = (c1 - c0 + 1) as u128;
-    let rows = (r1 - r0 + 1) as u128;
-    if cols * rows > MAX_RANGE_CELLS as u128 {
-        return Err(LatticeError::argument_error("RANGE spans too many cells"));
-    }
-    for r in r0..=r1 {
-        for c in c0..=c1 {
-            out.push(CellId::from_rc(c, r));
-        }
-    }
-    Ok(())
 }
 
 /// Collect numeric values referenced by the argument expressions.
@@ -333,27 +377,44 @@ fn collect_numbers(
     args: &[Expr],
     grid: &dyn GridState,
     env: &mut HashMap<String, CellValue>,
+    strict: bool,
 ) -> Result<Vec<f64>, LatticeError> {
     let mut out = Vec::new();
     for arg in args {
         match arg {
             Expr::Range { start, end } => {
                 let mut ids = Vec::new();
-                expand_range(start, end, &mut ids)?;
+                crate::dag::expand_range(start, end, &mut ids)?;
                 for id in ids {
-                    if let CellValue::Number(n) = grid.get_cell(id) {
-                        out.push(n);
+                    match grid.get_cell(id) {
+                        CellValue::Number(n) => out.push(n),
+                        CellValue::Empty => {}
+                        CellValue::Error(e) => return Err(e),
+                        other if strict => {
+                            return Err(LatticeError::type_error(
+                                "Number",
+                                variant_name(&other),
+                            ))
+                        }
+                        _ => {}
                     }
                 }
             }
-            Expr::CellRef(c) => {
-                if let CellValue::Number(n) = grid.get_cell(c.id) {
-                    out.push(n);
+            Expr::CellRef(c) => match grid.get_cell(c.id) {
+                CellValue::Number(n) => out.push(n),
+                CellValue::Empty => {}
+                CellValue::Error(e) => return Err(e),
+                other if strict => {
+                    return Err(LatticeError::type_error("Number", variant_name(&other)))
                 }
-            }
+                _ => {}
+            },
             other => match eval_expr(other, grid, env) {
                 CellValue::Number(n) => out.push(n),
                 CellValue::Error(e) => return Err(e),
+                v if strict => {
+                    return Err(LatticeError::type_error("Number", variant_name(&v)))
+                }
                 _ => {}
             },
         }
@@ -374,7 +435,7 @@ fn reduce_numbers(
             "{name} expects at least one argument"
         )));
     }
-    match collect_numbers(args, grid, env) {
+    match collect_numbers(args, grid, env, true) {
         Ok(nums) => CellValue::Number(nums.into_iter().fold(init, &f)),
         Err(e) => CellValue::Error(e),
     }
@@ -386,7 +447,7 @@ fn min_max(
     env: &mut HashMap<String, CellValue>,
     is_min: bool,
 ) -> CellValue {
-    match collect_numbers(args, grid, env) {
+    match collect_numbers(args, grid, env, true) {
         Ok(nums) => {
             if nums.is_empty() {
                 return CellValue::Empty;
@@ -403,7 +464,7 @@ fn min_max(
 }
 
 fn average(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValue>) -> CellValue {
-    match collect_numbers(args, grid, env) {
+    match collect_numbers(args, grid, env, true) {
         Ok(nums) => {
             if nums.is_empty() {
                 return CellValue::Empty;
@@ -416,7 +477,7 @@ fn average(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellVa
 }
 
 fn count(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValue>) -> CellValue {
-    match collect_numbers(args, grid, env) {
+    match collect_numbers(args, grid, env, false) {
         Ok(nums) => CellValue::Number(nums.len() as f64),
         Err(e) => CellValue::Error(e),
     }
@@ -514,14 +575,20 @@ fn len(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValue>
 }
 
 fn if_fn(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValue>) -> CellValue {
-    if args.len() != 3 {
+    if args.len() != 2 && args.len() != 3 {
         return CellValue::Error(LatticeError::argument_error(
-            "IF expects (cond, then, else)",
+            "IF expects (cond, then[, else])",
         ));
     }
     match eval_expr(&args[0], grid, env) {
         CellValue::Boolean(true) => eval_expr(&args[1], grid, env),
-        CellValue::Boolean(false) => eval_expr(&args[2], grid, env),
+        CellValue::Boolean(false) => {
+            if args.len() == 3 {
+                eval_expr(&args[2], grid, env)
+            } else {
+                CellValue::Empty
+            }
+        }
         CellValue::Error(e) => CellValue::Error(e),
         other => CellValue::Error(LatticeError::type_error("Boolean", variant_name(&other))),
     }
@@ -560,4 +627,817 @@ fn unary_bool(
         CellValue::Error(e) => CellValue::Error(e),
         other => CellValue::Error(LatticeError::type_error("Boolean", variant_name(&other))),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers for the extended function library (Phase 8)
+// ---------------------------------------------------------------------------
+
+/// Render any value as the text a string function would operate on.
+fn to_text(v: &CellValue) -> String {
+    match v {
+        CellValue::Text(s) => s.clone(),
+        CellValue::Number(n) => n.to_string(),
+        CellValue::Boolean(b) => b.to_string(),
+        CellValue::Date(s) => format_serial_date(*s),
+        CellValue::List(items) => items
+            .iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join(", "),
+        CellValue::Empty => String::new(),
+        CellValue::Error(e) => format!("#{e}"),
+    }
+}
+
+fn concat_values(l: CellValue, r: CellValue) -> CellValue {
+    match (&l, &r) {
+        (CellValue::Error(e), _) | (_, CellValue::Error(e)) => CellValue::Error(e.clone()),
+        _ => CellValue::Text(to_text(&l) + &to_text(&r)),
+    }
+}
+
+/// Evaluate `arg` to a text value, coercing numbers/booleans (as Excel does for
+/// string functions). Errors propagate; values that cannot be reasonably coerced
+/// become a [`LatticeError::TypeError`].
+fn eval_text(
+    arg: &Expr,
+    grid: &dyn GridState,
+    env: &mut HashMap<String, CellValue>,
+) -> CellValue {
+    match eval_expr(arg, grid, env) {
+        CellValue::Text(s) => CellValue::Text(s),
+        CellValue::Number(n) => CellValue::Text(n.to_string()),
+        CellValue::Boolean(b) => CellValue::Text(b.to_string()),
+        CellValue::Empty => CellValue::Text(String::new()),
+        e @ CellValue::Error(_) => e,
+    }
+}
+
+/// Evaluate `arg` to a non-negative integer index (used by LEFT/RIGHT/MID/...).
+fn eval_index(
+    arg: &Expr,
+    grid: &dyn GridState,
+    env: &mut HashMap<String, CellValue>,
+) -> Result<usize, CellValue> {
+    match eval_expr(arg, grid, env) {
+        CellValue::Number(n) if n.is_finite() && n >= 0.0 => Ok(n as usize),
+        CellValue::Error(e) => Err(CellValue::Error(e)),
+        other => Err(CellValue::Error(LatticeError::type_error(
+            "Number",
+            variant_name(&other),
+        ))),
+    }
+}
+
+fn count_error(name: &str) -> CellValue {
+    CellValue::Error(LatticeError::argument_error(format!(
+        "wrong number of arguments for {name}"
+    )))
+}
+
+fn predicate(
+    args: &[Expr],
+    grid: &dyn GridState,
+    env: &mut HashMap<String, CellValue>,
+    test: impl Fn(&CellValue) -> bool,
+) -> CellValue {
+    if args.len() != 1 {
+        return count_error("predicate");
+    }
+    let v = eval_expr(&args[0], grid, env);
+    CellValue::Boolean(test(&v))
+}
+
+fn iferror_fn(
+    args: &[Expr],
+    grid: &dyn GridState,
+    env: &mut HashMap<String, CellValue>,
+) -> CellValue {
+    if args.len() != 2 {
+        return count_error("IFERROR");
+    }
+    match eval_expr(&args[0], grid, env) {
+        CellValue::Error(_) => eval_expr(&args[1], grid, env),
+        other => other,
+    }
+}
+
+fn ifna_fn(
+    args: &[Expr],
+    grid: &dyn GridState,
+    env: &mut HashMap<String, CellValue>,
+) -> CellValue {
+    if args.len() != 2 {
+        return count_error("IFNA");
+    }
+    match eval_expr(&args[0], grid, env) {
+        CellValue::Error(LatticeError::NA) => eval_expr(&args[1], grid, env),
+        other => other,
+    }
+}
+
+fn text_transform(
+    args: &[Expr],
+    grid: &dyn GridState,
+    env: &mut HashMap<String, CellValue>,
+    f: impl Fn(&str) -> String,
+    name: &str,
+) -> CellValue {
+    if args.len() != 1 {
+        return count_error(name);
+    }
+    match eval_text(&args[0], grid, env) {
+        CellValue::Text(s) => CellValue::Text(f(&s)),
+        e => e,
+    }
+}
+
+fn left_right(
+    args: &[Expr],
+    grid: &dyn GridState,
+    env: &mut HashMap<String, CellValue>,
+    from_left: bool,
+) -> CellValue {
+    let n = args.len();
+    if !(1..=2).contains(&n) {
+        return count_error(if from_left { "LEFT" } else { "RIGHT" });
+    }
+    let s = match eval_text(&args[0], grid, env) {
+        CellValue::Text(s) => s,
+        e => return e,
+    };
+    let count = if n == 2 {
+        match eval_index(&args[1], grid, env) {
+            Ok(c) => c,
+            Err(e) => return e,
+        }
+    } else {
+        1
+    };
+    let chars: Vec<char> = s.chars().collect();
+    let count = count.min(chars.len());
+    let piece: String = if from_left {
+        chars.iter().take(count).collect()
+    } else {
+        chars.iter().skip(chars.len().saturating_sub(count)).collect()
+    };
+    CellValue::Text(piece)
+}
+
+fn mid(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValue>) -> CellValue {
+    if !(2..=3).contains(&args.len()) {
+        return count_error("MID");
+    }
+    let s = match eval_text(&args[0], grid, env) {
+        CellValue::Text(s) => s,
+        e => return e,
+    };
+    let start = match eval_index(&args[1], grid, env) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let len = if args.len() == 3 {
+        match eval_index(&args[2], grid, env) {
+            Ok(c) => c,
+            Err(e) => return e,
+        }
+    } else {
+        usize::MAX
+    };
+    if start == 0 {
+        return CellValue::Text(String::new());
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let start_idx = start - 1;
+    if start_idx >= chars.len() {
+        return CellValue::Text(String::new());
+    }
+    let end = (start_idx + len).min(chars.len());
+    CellValue::Text(chars[start_idx..end].iter().collect())
+}
+
+fn find(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValue>) -> CellValue {
+    if !(2..=3).contains(&args.len()) {
+        return count_error("FIND");
+    }
+    let needle = match eval_text(&args[0], grid, env) {
+        CellValue::Text(s) => s,
+        e => return e,
+    };
+    let haystack = match eval_text(&args[1], grid, env) {
+        CellValue::Text(s) => s,
+        e => return e,
+    };
+    let start = if args.len() == 3 {
+        match eval_index(&args[2], grid, env) {
+            Ok(c) => c,
+            Err(e) => return e,
+        }
+    } else {
+        1
+    };
+    if start == 0 {
+        return CellValue::Error(LatticeError::argument_error(
+            "FIND start position must be >= 1",
+        ));
+    }
+    let h: Vec<char> = haystack.chars().collect();
+    let n: Vec<char> = needle.chars().collect();
+    if n.is_empty() {
+        return CellValue::Number(1.0);
+    }
+    let sidx = start - 1;
+    if sidx >= h.len() {
+        return CellValue::Error(LatticeError::na());
+    }
+    let max = h.len() - n.len();
+    for i in sidx..=max {
+        if h[i..i + n.len()] == n[..] {
+            return CellValue::Number((i + 1) as f64);
+        }
+    }
+    CellValue::Error(LatticeError::na())
+}
+
+fn substitute(
+    args: &[Expr],
+    grid: &dyn GridState,
+    env: &mut HashMap<String, CellValue>,
+) -> CellValue {
+    if !(3..=4).contains(&args.len()) {
+        return count_error("SUBSTITUTE");
+    }
+    let text = match eval_text(&args[0], grid, env) {
+        CellValue::Text(s) => s,
+        e => return e,
+    };
+    let old = match eval_text(&args[1], grid, env) {
+        CellValue::Text(s) => s,
+        e => return e,
+    };
+    let new = match eval_text(&args[2], grid, env) {
+        CellValue::Text(s) => s,
+        e => return e,
+    };
+    let nth = if args.len() == 4 {
+        match eval_index(&args[3], grid, env) {
+            Ok(c) => c,
+            Err(e) => return e,
+        }
+    } else {
+        0
+    };
+    if old.is_empty() {
+        return CellValue::Text(text);
+    }
+    if nth == 0 {
+        return CellValue::Text(text.replace(&old, &new));
+    }
+    let mut out = String::new();
+    let mut count = 0;
+    let mut rest = text.as_str();
+    while let Some(pos) = rest.find(&old) {
+        count += 1;
+        if count == nth {
+            out.push_str(&rest[..pos]);
+            out.push_str(&new);
+            out.push_str(&rest[pos + old.len()..]);
+            return CellValue::Text(out);
+        }
+        out.push_str(&rest[..pos + old.len()]);
+        rest = &rest[pos + old.len()..];
+    }
+    CellValue::Text(out)
+}
+
+fn replace(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValue>) -> CellValue {
+    if args.len() != 4 {
+        return count_error("REPLACE");
+    }
+    let text = match eval_text(&args[0], grid, env) {
+        CellValue::Text(s) => s,
+        e => return e,
+    };
+    let start = match eval_index(&args[1], grid, env) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let len = match eval_index(&args[2], grid, env) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let new = match eval_text(&args[3], grid, env) {
+        CellValue::Text(s) => s,
+        e => return e,
+    };
+    let chars: Vec<char> = text.chars().collect();
+    let s = if start == 0 { 0 } else { start - 1 };
+    let e = (s + len).min(chars.len());
+    let mut out: String = chars[..s].iter().collect();
+    out.push_str(&new);
+    out.extend(chars[e..].iter());
+    CellValue::Text(out)
+}
+
+/// Expand a `RANGE(...)` argument into the list of cell values it covers.
+fn eval_range(arg: &Expr, grid: &dyn GridState) -> Result<Vec<CellValue>, CellValue> {
+    match arg {
+        Expr::Range { start, end } => {
+            let mut ids = Vec::new();
+            if let Err(e) = crate::dag::expand_range(start, end, &mut ids) {
+                return Err(CellValue::Error(e));
+            }
+            Ok(ids.iter().map(|id| grid.get_cell(*id).sanitize()).collect())
+        }
+        _ => Err(CellValue::Error(LatticeError::argument_error(
+            "expected a RANGE(...) argument",
+        ))),
+    }
+}
+
+/// Expand a `RANGE(...)` and return its flat (row-major) cell-id list plus the
+/// `(cols, rows)` dimensions of the rectangle.
+fn expand_range_meta(
+    arg: &Expr,
+    _grid: &dyn GridState,
+) -> Result<(Vec<CellId>, usize, usize), CellValue> {
+    match arg {
+        Expr::Range { start, end } => {
+            let (sc, sr) = start.id.to_rc();
+            let (ec, er) = end.id.to_rc();
+            let (c0, c1) = (sc.min(ec), sc.max(ec));
+            let (r0, r1) = (sr.min(er), sr.max(er));
+            let cols = (c1 - c0 + 1) as usize;
+            let rows = (r1 - r0 + 1) as usize;
+            let mut ids = Vec::new();
+            if let Err(e) = crate::dag::expand_range(start, end, &mut ids) {
+                return Err(CellValue::Error(e));
+            }
+            Ok((ids, cols, rows))
+        }
+        _ => Err(CellValue::Error(LatticeError::argument_error(
+            "expected a RANGE(...) argument",
+        ))),
+    }
+}
+
+// --- Conditional-aggregate criterion matching ---------------------------------
+
+enum CmpOp {
+    Gt,
+    Lt,
+    Ge,
+    Le,
+}
+
+enum Criterion {
+    Exact(CellValue),
+    Ne(CellValue),
+    Cmp(CmpOp, CellValue),
+}
+
+/// Interpret a criterion expression (typically a text literal such as `">5"` or
+/// a bare value as an exact match).
+fn parse_criterion(cond: &CellValue) -> Criterion {
+    if let CellValue::Text(s) = cond {
+        if let Some(rest) = s.strip_prefix("<>") {
+            return Criterion::Ne(criterion_value(rest));
+        }
+        if let Some(rest) = s.strip_prefix(">=") {
+            return Criterion::Cmp(CmpOp::Ge, criterion_value(rest));
+        }
+        if let Some(rest) = s.strip_prefix("<=") {
+            return Criterion::Cmp(CmpOp::Le, criterion_value(rest));
+        }
+        if let Some(rest) = s.strip_prefix(">") {
+            return Criterion::Cmp(CmpOp::Gt, criterion_value(rest));
+        }
+        if let Some(rest) = s.strip_prefix("<") {
+            return Criterion::Cmp(CmpOp::Lt, criterion_value(rest));
+        }
+        if let Some(rest) = s.strip_prefix("=") {
+            return Criterion::Exact(criterion_value(rest));
+        }
+    }
+    Criterion::Exact(cond.clone())
+}
+
+fn criterion_value(s: &str) -> CellValue {
+    match s.trim().parse::<f64>() {
+        Ok(n) if n.is_finite() => CellValue::Number(n),
+        _ => CellValue::Text(s.to_string()),
+    }
+}
+
+fn matches_criterion(value: &CellValue, crit: &Criterion) -> bool {
+    match crit {
+        Criterion::Exact(c) => value == c,
+        Criterion::Ne(c) => value != c,
+        Criterion::Cmp(op, c) => {
+            let ord = match (value, c) {
+                (CellValue::Number(a), CellValue::Number(b)) => a.partial_cmp(b),
+                (CellValue::Text(a), CellValue::Text(b)) => Some(a.cmp(b)),
+                _ => None,
+            };
+            matches!(
+                (ord, op),
+                (Some(std::cmp::Ordering::Less), CmpOp::Lt | CmpOp::Le)
+                    | (Some(std::cmp::Ordering::Greater), CmpOp::Gt | CmpOp::Le)
+                    | (Some(std::cmp::Ordering::Equal), CmpOp::Ge | CmpOp::Le)
+            )
+        }
+    }
+}
+
+fn countif(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValue>) -> CellValue {
+    if args.len() != 2 {
+        return count_error("COUNTIF");
+    }
+    let values = match eval_range(&args[0], grid) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let cond = eval_expr(&args[1], grid, env);
+    let crit = parse_criterion(&cond);
+    let n = values.iter().filter(|v| matches_criterion(v, &crit)).count();
+    CellValue::Number(n as f64)
+}
+
+fn sumif(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValue>) -> CellValue {
+    if args.len() != 2 && args.len() != 3 {
+        return count_error("SUMIF");
+    }
+    let range_vals = match eval_range(&args[0], grid) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let cond = eval_expr(&args[1], grid, env);
+    let crit = parse_criterion(&cond);
+    let sum_vals: Vec<CellValue> = if args.len() == 3 {
+        match eval_range(&args[2], grid) {
+            Ok(v) => v,
+            Err(e) => return e,
+        }
+    } else {
+        range_vals.clone()
+    };
+    let mut sum = 0.0;
+    for (i, v) in range_vals.iter().enumerate() {
+        if matches_criterion(v, &crit) {
+            if let CellValue::Number(n) = sum_vals.get(i).cloned().unwrap_or(CellValue::Empty) {
+                sum += n;
+            }
+        }
+    }
+    CellValue::Number(sum)
+}
+
+fn averageif(
+    args: &[Expr],
+    grid: &dyn GridState,
+    env: &mut HashMap<String, CellValue>,
+) -> CellValue {
+    if args.len() != 2 && args.len() != 3 {
+        return count_error("AVERAGEIF");
+    }
+    let range_vals = match eval_range(&args[0], grid) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let cond = eval_expr(&args[1], grid, env);
+    let crit = parse_criterion(&cond);
+    let avg_vals: Vec<CellValue> = if args.len() == 3 {
+        match eval_range(&args[2], grid) {
+            Ok(v) => v,
+            Err(e) => return e,
+        }
+    } else {
+        range_vals.clone()
+    };
+    let mut sum = 0.0;
+    let mut count = 0;
+    for (i, v) in range_vals.iter().enumerate() {
+        if matches_criterion(v, &crit) {
+            if let CellValue::Number(n) = avg_vals.get(i).cloned().unwrap_or(CellValue::Empty) {
+                sum += n;
+                count += 1;
+            }
+        }
+    }
+    if count == 0 {
+        return CellValue::Error(LatticeError::DivByZero);
+    }
+    CellValue::Number(sum / count as f64)
+}
+
+fn sumifs(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValue>) -> CellValue {
+    if args.len() < 3 || args.len() % 2 == 0 {
+        return count_error("SUMIFS");
+    }
+    let sum_vals = match eval_range(&args[0], grid) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let n = sum_vals.len();
+    let mut mask = vec![true; n];
+    let mut i = 1;
+    while i + 1 < args.len() {
+        let rv = match eval_range(&args[i], grid) {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+        let cond = eval_expr(&args[i + 1], grid, env);
+        let crit = parse_criterion(&cond);
+        for (j, v) in rv.iter().enumerate() {
+            if j >= n {
+                continue;
+            }
+            if !matches_criterion(v, &crit) {
+                mask[j] = false;
+            }
+        }
+        i += 2;
+    }
+    let sum: f64 = sum_vals
+        .iter()
+        .enumerate()
+        .filter(|(j, _)| mask[*j])
+        .filter_map(|(_, v)| if let CellValue::Number(n) = v { Some(*n) } else { None })
+        .sum();
+    CellValue::Number(sum)
+}
+
+// --- Lookups ------------------------------------------------------------------
+
+fn index_fn(
+    args: &[Expr],
+    grid: &dyn GridState,
+    env: &mut HashMap<String, CellValue>,
+) -> CellValue {
+    if !(2..=3).contains(&args.len()) {
+        return count_error("INDEX");
+    }
+    let (ids, cols, rows) = match expand_range_meta(&args[0], grid) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let row = match eval_index(&args[1], grid, env) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let col = if args.len() == 3 {
+        match eval_index(&args[2], grid, env) {
+            Ok(c) => c,
+            Err(e) => return e,
+        }
+    } else {
+        1
+    };
+    if row == 0 || col == 0 || row > rows || col > cols {
+        return CellValue::Error(LatticeError::ref_error("INDEX position out of range"));
+    }
+    let idx = (row - 1) * cols + (col - 1);
+    grid.get_cell(ids[idx]).sanitize()
+}
+
+/// `VLOOKUP` (horizontal=false) and `HLOOKUP` (horizontal=true). Searches the
+/// first column/row of the table for an exact match and returns the value at
+/// the requested column/row index.
+fn vlookup(
+    args: &[Expr],
+    grid: &dyn GridState,
+    env: &mut HashMap<String, CellValue>,
+    horizontal: bool,
+) -> CellValue {
+    let name = if horizontal { "HLOOKUP" } else { "VLOOKUP" };
+    if !(3..=4).contains(&args.len()) {
+        return count_error(name);
+    }
+    let key = eval_expr(&args[0], grid, env);
+    let (ids, cols, rows) = match expand_range_meta(&args[1], grid) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let idx = match eval_index(&args[2], grid, env) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    if idx == 0 {
+        return CellValue::Error(LatticeError::ref_error(format!(
+            "{name} index must be >= 1"
+        )));
+    }
+    if horizontal {
+        if idx > rows {
+            return CellValue::Error(LatticeError::ref_error(format!(
+                "{name} index out of range"
+            )));
+        }
+        for c in 0..cols {
+            let search_pos = c; // first row
+            if grid.get_cell(ids[search_pos]).sanitize() == key {
+                let ret_pos = (idx - 1) * cols + c;
+                return grid.get_cell(ids[ret_pos]).sanitize();
+            }
+        }
+    } else {
+        if idx > cols {
+            return CellValue::Error(LatticeError::ref_error(format!(
+                "{name} index out of range"
+            )));
+        }
+        for r in 0..rows {
+            let search_pos = r * cols; // first column
+            if grid.get_cell(ids[search_pos]).sanitize() == key {
+                let ret_pos = r * cols + (idx - 1);
+                return grid.get_cell(ids[ret_pos]).sanitize();
+            }
+        }
+    }
+    CellValue::Error(LatticeError::na())
+}
+
+fn xlookup(
+    args: &[Expr],
+    grid: &dyn GridState,
+    env: &mut HashMap<String, CellValue>,
+) -> CellValue {
+    if !(3..=6).contains(&args.len()) {
+        return count_error("XLOOKUP");
+    }
+    let key = eval_expr(&args[0], grid, env);
+    let (lu, _, _) = match expand_range_meta(&args[1], grid) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let (ret, _, _) = match expand_range_meta(&args[2], grid) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    for (k, id) in lu.iter().enumerate() {
+        if grid.get_cell(*id).sanitize() == key {
+            if k < ret.len() {
+                return grid.get_cell(ret[k]).sanitize();
+            }
+            return CellValue::Error(LatticeError::ref_error(
+                "XLOOKUP return index out of range",
+            ));
+        }
+    }
+    if args.len() >= 4 {
+        return eval_expr(&args[3], grid, env);
+    }
+    CellValue::Error(LatticeError::na())
+}
+
+// --- Statistics ----------------------------------------------------------------
+
+fn median(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValue>) -> CellValue {
+    match collect_numbers(args, grid, env, false) {
+        Ok(mut nums) => {
+            if nums.is_empty() {
+                return CellValue::Empty;
+            }
+            nums.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let n = nums.len();
+            if n % 2 == 1 {
+                CellValue::Number(nums[n / 2])
+            } else {
+                CellValue::Number((nums[n / 2 - 1] + nums[n / 2]) / 2.0)
+            }
+        }
+        Err(e) => CellValue::Error(e),
+    }
+}
+
+fn sample_var(
+    args: &[Expr],
+    grid: &dyn GridState,
+    env: &mut HashMap<String, CellValue>,
+) -> CellValue {
+    match collect_numbers(args, grid, env, false) {
+        Ok(nums) => {
+            let n = nums.len() as f64;
+            if n < 2.0 {
+                return CellValue::Error(LatticeError::DivByZero);
+            }
+            let mean = nums.iter().sum::<f64>() / n;
+            let var = nums.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0);
+            CellValue::Number(var)
+        }
+        Err(e) => CellValue::Error(e),
+    }
+}
+
+fn stdev(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValue>) -> CellValue {
+    match sample_var(args, grid, env) {
+        CellValue::Number(v) => CellValue::Number(v.sqrt()),
+        other => other,
+    }
+}
+
+fn mode_fn(
+    args: &[Expr],
+    grid: &dyn GridState,
+    env: &mut HashMap<String, CellValue>,
+) -> CellValue {
+    match collect_numbers(args, grid, env, false) {
+        Ok(nums) => {
+            if nums.is_empty() {
+                return CellValue::Error(LatticeError::na());
+            }
+            let mut best: Option<f64> = None;
+            let mut best_count = 0;
+            for &x in &nums {
+                let c = nums.iter().filter(|&&y| y == x).count();
+                if c > best_count {
+                    best_count = c;
+                    best = Some(x);
+                }
+            }
+            if best_count <= 1 {
+                return CellValue::Error(LatticeError::na());
+            }
+            CellValue::Number(best.unwrap())
+        }
+        Err(e) => CellValue::Error(e),
+    }
+}
+
+fn rank_fn(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValue>) -> CellValue {
+    if !(2..=3).contains(&args.len()) {
+        return count_error("RANK");
+    }
+    let value = eval_expr(&args[0], grid, env);
+    let list = match eval_range(&args[1], grid) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let order = if args.len() == 3 {
+        match eval_index(&args[2], grid, env) {
+            Ok(c) => c,
+            Err(e) => return e,
+        }
+    } else {
+        0
+    };
+    let target = match value {
+        CellValue::Number(n) => n,
+        CellValue::Error(e) => return CellValue::Error(e),
+        other => return CellValue::Error(LatticeError::type_error("Number", variant_name(&other))),
+    };
+    let numbers: Vec<f64> = list
+        .iter()
+        .filter_map(|v| if let CellValue::Number(n) = v { Some(*n) } else { None })
+        .collect();
+    let rank = if order == 0 {
+        1 + numbers.iter().filter(|&&x| x > target).count()
+    } else {
+        1 + numbers.iter().filter(|&&x| x < target).count()
+    };
+    CellValue::Number(rank as f64)
+}
+
+fn percentile(
+    args: &[Expr],
+    grid: &dyn GridState,
+    env: &mut HashMap<String, CellValue>,
+) -> CellValue {
+    if args.len() != 2 {
+        return count_error("PERCENTILE");
+    }
+    let list = match eval_range(&args[0], grid) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let k = match eval_expr(&args[1], grid, env) {
+        CellValue::Number(n) => n,
+        CellValue::Error(e) => return CellValue::Error(e),
+        other => return CellValue::Error(LatticeError::type_error("Number", variant_name(&other))),
+    };
+    if !(0.0..=1.0).contains(&k) {
+        return CellValue::Error(LatticeError::argument_error(
+            "PERCENTILE k must be in [0, 1]",
+        ));
+    }
+    let mut nums: Vec<f64> = list
+        .iter()
+        .filter_map(|v| if let CellValue::Number(n) = v { Some(*n) } else { None })
+        .collect();
+    if nums.is_empty() {
+        return CellValue::Error(LatticeError::argument_error(
+            "PERCENTILE needs at least one number",
+        ));
+    }
+    nums.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = (nums.len() - 1) as f64;
+    let pos = k * n;
+    let lo = pos.floor() as usize;
+    let hi = pos.ceil() as usize;
+    if lo == hi {
+        return CellValue::Number(nums[lo]);
+    }
+    let frac = pos - lo as f64;
+    CellValue::Number(nums[lo] + (nums[hi] - nums[lo]) * frac)
 }

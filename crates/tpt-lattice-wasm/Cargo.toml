@@ -27,3 +27,6 @@ serde_json = { workspace = true }
 # host/test builds are unaffected.
 [target.wasm32-unknown-unknown.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"

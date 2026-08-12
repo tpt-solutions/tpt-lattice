@@ -14,15 +14,21 @@ class Hub {
   history: string[] = [];
   connect(ws: FakeWebSocket) {
     this.clients.add(ws);
-    queueMicrotask(() => ws.onopen && ws.onopen());
-    for (const h of this.history) ws.onmessage && ws.onmessage({ data: h });
+    queueMicrotask(() => {
+      if (ws.onopen) ws.onopen();
+    });
+    for (const h of this.history) {
+      if (ws.onmessage) ws.onmessage({ data: h });
+    }
   }
   broadcast(_from: FakeWebSocket, data: string) {
-    for (const c of this.clients) c.onmessage && c.onmessage({ data });
+    for (const c of this.clients) {
+      if (c.onmessage) c.onmessage({ data });
+    }
   }
   disconnect(ws: FakeWebSocket) {
     this.clients.delete(ws);
-    ws.onclose && ws.onclose();
+    if (ws.onclose) ws.onclose();
   }
 }
 

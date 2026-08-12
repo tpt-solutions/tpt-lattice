@@ -1,0 +1,69 @@
+name: Release
+
+# Tag-triggered publication. Requires a `CRATES_IO_TOKEN` repo secret (a crates.io
+# API token) and push access; both are auth-gated, so this workflow is the
+# automation that runs once those are provisioned. It publishes every workspace
+# crate to crates.io in dependency order, then creates a GitHub Release from the
+# tag with auto-generated notes.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify (build + test) before publishing
+        run: |
+          cargo build --workspace --verbose
+          cargo test --workspace --verbose
+      - name: Publish crates in dependency order
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: |
+          # Topological order: leaves (core) first, wasm last.
+          CRATES=(
+            tpt-lattice-core
+            tpt-lattice-parser
+            tpt-lattice-crdt
+            tpt-lattice-evaluator
+            tpt-lattice-io
+            tpt-lattice-import-xlsx
+            tpt-lattice-server
+            tpt-lattice-wasm
+          )
+          for c in "${CRATES[@]}"; do
+            echo "::group::cargo publish -p $c"
+            # Retry a couple of times: crates.io index propagation between
+            # dependent publishes can race.
+            for attempt in 1 2 3; do
+              if cargo publish -p "$c" --token "$CRATES_IO_TOKEN" --no-verify; then
+                break
+              fi
+              echo "publish attempt $attempt for $c failed; retrying..."
+              sleep 15
+            done
+            echo "::endgroup::"
+          done
+
+  github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: publish
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true

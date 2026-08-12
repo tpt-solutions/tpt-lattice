@@ -200,30 +200,43 @@ with the engine worker and `tpt_lattice_wasm_bg.wasm` asset. Run `npm run dev` t
 
 ## Phase 8 — Formula Language Gaps (LES)
 
-- [ ] Add lookup functions: `VLOOKUP`/`HLOOKUP`/`INDEX`/`MATCH`-style lookup/`XLOOKUP`
-- [ ] Add conditional aggregates: `SUMIF`/`COUNTIF`/`AVERAGEIF`/`SUMIFS`
-- [ ] Add `IFERROR`/`IFNA` convenience wrappers (today only the verbose `MATCH` Ok/Err form
-      covers this)
-- [ ] Add predicates: `ISBLANK`/`ISERROR`/`ISNUMBER`/`ISTEXT`/`ISNA`
-- [ ] Add string functions: `UPPER`/`LOWER`/`TRIM`/`LEFT`/`RIGHT`/`MID`/`FIND`/`SUBSTITUTE`/
-      `REPLACE`/`SPLIT`, and a `&` string-concatenation operator
+- [x] Add lookup functions: `VLOOKUP`/`HLOOKUP`/`INDEX`/`XLOOKUP` (a separate `MATCH`-style
+      *lookup* function is intentionally **not** added — `MATCH` is already the Ok/Err
+      error-handling construct in LES, so a same-named lookup would collide; `XLOOKUP` covers
+      the lookup-and-return case. Implemented in `tpt-lattice-evaluator/src/eval.rs`.)
+- [x] Add conditional aggregates: `SUMIF`/`COUNTIF`/`AVERAGEIF`/`SUMIFS` (criterion supports
+      `>`,`<`,`>=`,`<=`,`<>`,`=` operators and exact matches; `AVERAGEIF`/`SUMIFS` return
+      `#DIV/0!`-style errors when no rows match)
+- [x] Add `IFERROR`/`IFNA` convenience wrappers
+- [x] Add predicates: `ISBLANK`/`ISERROR`/`ISNUMBER`/`ISTEXT`/`ISNA` (added `LatticeError::NA`
+      for `#N/A` semantics, recognized by `ISNA`)
+- [x] Add string functions: `UPPER`/`LOWER`/`TRIM`/`LEFT`/`RIGHT`/`MID`/`FIND`/`SUBSTITUTE`/
+      `REPLACE` and a `&` string-concatenation operator (added `BinaryOp::Concat` to the AST +
+      parser). `SPLIT` is **deferred** — LES has no list/array value type to return into yet.
 - [ ] Add a `CellValue::Date`/time type plus `DATE`/`TODAY`/`NOW`/`YEAR`/`MONTH`/`DAY`/
-      `DATEDIF`
-- [ ] Add statistics functions: `MEDIAN`/`STDEV`/`VAR`/`MODE`/`RANK`/`PERCENTILE`
+      `DATEDIF` — *deferred*: requires adding a `Date` variant to `CellValue` (touches core,
+      `tpt-lattice-io`, wasm glue, and the frontend renderer)
+- [x] Add statistics functions: `MEDIAN`/`STDEV`/`VAR`/`MODE`/`RANK`/`PERCENTILE`
 - [ ] Add named ranges / reusable formulas (resolve the parser ambiguity where any
-      `[A-Za-z]+[0-9]+`-shaped identifier is always parsed as a `CellRef` first)
-- [ ] Add absolute reference syntax (`$A$1`) and fill/copy semantics
-- [ ] Add multi-sheet / 3D references (`Sheet1!A1`) at the core/parser/evaluator level
+      `[A-Za-z]+[0-9]+`-shaped identifier is always parsed as a `CellRef` first) — *deferred*
+- [ ] Add absolute reference syntax (`$A$1`) and fill/copy semantics — *deferred*
+- [ ] Add multi-sheet / 3D references (`Sheet1!A1`) at the core/parser/evaluator level —
+      *deferred* (depends on real multi-sheet support in Phase 9)
 - [ ] Switch error display to familiar Excel-style codes (`#DIV/0!`, `#REF!`, `#VALUE!`,
-      `#NAME?`) instead of prose messages
+      `#NAME?`) instead of prose messages — *partial*: added `LatticeError::NA` (`#N/A`); full
+      recoding of all error variants to Excel codes is deferred (touches display + serialization)
 - [ ] Make `SUM`/aggregate functions error on non-numeric args instead of silently skipping
-      them, for consistency with LES's strict-typing philosophy
-- [ ] Support 2-argument `IF` (implicit empty/`FALSE` else-branch)
-- [ ] Fix the misleading "RANGE used outside of a function argument" error, which fires even
-      when `RANGE` is inside a function argument that just isn't one of the special-cased
-      aggregates
-- [ ] De-duplicate `expand_range`, currently copy-pasted identically in `dag.rs` and
-      `eval.rs`
+      them, for consistency with LES's strict-typing philosophy — *deferred* (would change
+      existing `SUM`/`AVERAGE` semantics and break current round-trip tests)
+- [x] Support 2-argument `IF` (implicit empty/`FALSE` else-branch)
+- [x] Fix the misleading "RANGE used outside of a function argument" error: it now returns a
+      clear `ArgumentError` naming `SUM`/`INDEX`/`VLOOKUP` as valid consumers, and every
+      range-accepting function (`SUM`, `INDEX`, `VLOOKUP`/`HLOOKUP`, `XLOOKUP`, conditional
+      aggregates, statistics) expands the range itself instead of letting it reach the generic
+      evaluator
+- [x] De-duplicate `expand_range`: the single canonical implementation now lives in
+      `dag.rs` (`pub fn expand_range`) and is reused by the dependency collector (`lib.rs`) and
+      the evaluator's aggregate/lookup functions (`eval.rs`)
 
 ## Phase 9 — Missing UI/UX Features
 

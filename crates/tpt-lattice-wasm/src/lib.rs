@@ -250,3 +250,33 @@ fn error_response(message: &str) -> String {
     })
     .unwrap_or_else(|_| "{\"type\":\"Error\",\"message\":\"serialization failure\"}".to_string())
 }
+
+// Smoke tests executed by `wasm-pack test` in CI. Guarded to `wasm32` so the
+// host `cargo test --workspace` run is unaffected (the crate is a `cdylib`).
+#[cfg(all(test, target_arch = "wasm32"))]
+mod wasm_tests {
+    use tpt_lattice_core::{CellId, CellValue};
+    use tpt_lattice_evaluator::Evaluator;
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    wasm_bindgen_test::wasm_bindgen_test_configure!();
+
+    #[wasm_bindgen_test]
+    fn engine_evaluates_through_handle() {
+        let engine = super::LatticeEngine::new();
+        engine.handle(r#"{"type":"SetCell","cell":"A1","value":{"Number":21}}"#);
+        engine.handle(r#"{"type":"SetFormula","cell":"B1","formula":"=A1 * 2"}"#);
+        engine.handle(r#"{"type":"Evaluate"}"#);
+        let resp = engine.handle(r#"{"type":"GetCell","cell":"B1"}"#);
+        assert!(resp.contains("\"Number\":42"), "expected 42, got {resp}");
+    }
+
+    #[wasm_bindgen_test]
+    fn evaluator_core_math() {
+        let mut e = Evaluator::new();
+        e.set_value(CellId::from_a1("A1"), CellValue::Number(21.0));
+        e.set_formula(CellId::from_a1("B1"), "=A1 * 2").unwrap();
+        e.evaluate().unwrap();
+        assert_eq!(e.get_value(CellId::from_a1("B1")), CellValue::Number(42.0));
+    }
+}

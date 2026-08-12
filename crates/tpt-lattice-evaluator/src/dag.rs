@@ -10,11 +10,40 @@ use petgraph::algo::{tarjan_scc, toposort};
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
-use tpt_lattice_core::CellId;
+use tpt_lattice_core::{CellId, LatticeError};
+use tpt_lattice_parser::ast::CellRef;
 
 /// The maximum number of cells a single `RANGE(...)` may span before it is
 /// rejected, to avoid accidentally materializing enormous dependency sets.
 pub const MAX_RANGE_CELLS: usize = 1_000_000;
+
+/// Expand a range rectangle into `out` (row-major), capped at
+/// [`MAX_RANGE_CELLS`].
+///
+/// This is the single canonical implementation, shared by the dependency
+/// collector ([`crate::Evaluator`]) and the evaluator's aggregate/lookup
+/// functions so the two copies cannot drift apart (previously duplicated in
+/// `lib.rs` and `eval.rs`).
+pub fn expand_range(start: &CellRef, end: &CellRef, out: &mut Vec<CellId>) -> Result<(), LatticeError> {
+    let (sc, sr) = start.id.to_rc();
+    let (ec, er) = end.id.to_rc();
+    let (c0, c1) = (sc.min(ec), sc.max(ec));
+    let (r0, r1) = (sr.min(er), sr.max(er));
+    // Compute the cell count in u128 so a wide column×row span can never
+    // overflow (u64/usize) and silently bypass MAX_RANGE_CELLS (especially
+    // dangerous on wasm32, where usize is 32-bit).
+    let cols = (c1 - c0 + 1) as u128;
+    let rows = (r1 - r0 + 1) as u128;
+    if cols * rows > MAX_RANGE_CELLS as u128 {
+        return Err(LatticeError::argument_error("RANGE spans too many cells"));
+    }
+    for row in r0..=r1 {
+        for col in c0..=c1 {
+            out.push(CellId::from_rc(col, row));
+        }
+    }
+    Ok(())
+}
 
 /// Tracks `who I need` (dependencies) and `who needs me` (dependents).
 #[derive(Debug, Clone, Default)]

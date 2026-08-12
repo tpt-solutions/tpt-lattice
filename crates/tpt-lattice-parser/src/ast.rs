@@ -88,13 +88,21 @@ pub enum Literal {
 }
 
 /// A cell reference, resolved to a packed [`CellId`] plus the original A1 text.
+///
+/// `abs_col`/`abs_row` record whether the column/row were dollar-prefixed
+/// (`$A$1`, `A$1`, `$A1`); they are metadata for copy/fill semantics and do not
+/// affect evaluation (a reference always resolves to the same [`CellId`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct CellRef {
     /// The packed coordinate.
     pub id: CellId,
-    /// The original A1 text (e.g. `"A1"`), preserved for diagnostics.
+    /// The original A1 text (e.g. `"$A$1"`), preserved for diagnostics.
     pub a1: String,
+    /// Whether the column part was absolute (`$A`).
+    pub abs_col: bool,
+    /// Whether the row part was absolute (`A$1`).
+    pub abs_row: bool,
 }
 
 /// Unary operators.
@@ -139,6 +147,8 @@ pub enum BinaryOp {
     And,
     /// Logical or (`or` / `||`).
     Or,
+    /// String concatenation (`&`).
+    Concat,
 }
 
 /// The three constructors matched by `MATCH`.
@@ -220,6 +230,7 @@ impl BinaryOp {
             BinaryOp::Ge => ">=",
             BinaryOp::And => "and",
             BinaryOp::Or => "or",
+            BinaryOp::Concat => "&",
         }
     }
 }

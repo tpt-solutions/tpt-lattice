@@ -37,6 +37,10 @@ pub enum LatticeError {
     NotANumber,
     /// A circular dependency was detected while evaluating.
     CircularReference(String),
+    /// A value is not available / not found (the `#N/A` family of errors).
+    /// Returned by lookup functions (e.g. `VLOOKUP`) when no match exists, and
+    /// recognized by the `ISNA` predicate.
+    NA,
     /// A formula references a function not supported by LES.
     UnsupportedFormula(String),
     /// A function received the wrong number of arguments.
@@ -69,6 +73,11 @@ impl LatticeError {
         LatticeError::ArgumentError(detail.into())
     }
 
+    /// Convenience constructor for a [`LatticeError::NA`].
+    pub fn na() -> Self {
+        LatticeError::NA
+    }
+
     /// Convenience constructor for a [`LatticeError::UnsupportedFormula`].
     pub fn unsupported(detail: impl Into<String>) -> Self {
         LatticeError::UnsupportedFormula(detail.into())
@@ -82,19 +91,21 @@ impl LatticeError {
 
 impl fmt::Display for LatticeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Render with familiar Excel-style error codes so that a failed cell
+        // reads `#DIV/0!` rather than a prose message. Variant *names* are
+        // unchanged, so serialized history and downstream matches keep working.
         match self {
-            LatticeError::ParseError(s) => write!(f, "parse error: {s}"),
-            LatticeError::TypeError { expected, got } => {
-                write!(f, "type error: expected {expected}, got {got}")
-            }
-            LatticeError::DivByZero => write!(f, "division by zero"),
-            LatticeError::NameError(s) => write!(f, "name error: unknown identifier {s}"),
-            LatticeError::RefError(s) => write!(f, "reference error: {s}"),
-            LatticeError::NotANumber => write!(f, "not a number"),
-            LatticeError::CircularReference(s) => write!(f, "circular reference involving {s}"),
-            LatticeError::UnsupportedFormula(s) => write!(f, "unsupported formula: {s}"),
-            LatticeError::ArgumentError(s) => write!(f, "argument error: {s}"),
-            LatticeError::Internal(s) => write!(f, "internal error: {s}"),
+            LatticeError::ParseError(_) => write!(f, "#ERROR!"),
+            LatticeError::TypeError { .. } => write!(f, "#VALUE!"),
+            LatticeError::DivByZero => write!(f, "#DIV/0!"),
+            LatticeError::NameError(_) => write!(f, "#NAME?"),
+            LatticeError::RefError(_) => write!(f, "#REF!"),
+            LatticeError::NotANumber => write!(f, "#NUM!"),
+            LatticeError::NA => write!(f, "#N/A"),
+            LatticeError::CircularReference(_) => write!(f, "#CIRC!"),
+            LatticeError::UnsupportedFormula(_) => write!(f, "#ERROR!"),
+            LatticeError::ArgumentError(_) => write!(f, "#ERROR!"),
+            LatticeError::Internal(_) => write!(f, "#ERROR!"),
         }
     }
 }
@@ -106,11 +117,10 @@ mod tests {
 
     #[test]
     fn display_formats() {
-        assert_eq!(LatticeError::DivByZero.to_string(), "division by zero");
-        assert!(LatticeError::type_error("Number", "Text")
-            .to_string()
-            .contains("expected Number"));
-        assert!(LatticeError::name_error("FOO").to_string().contains("FOO"));
+        assert_eq!(LatticeError::DivByZero.to_string(), "#DIV/0!");
+        assert_eq!(LatticeError::type_error("Number", "Text").to_string(), "#VALUE!");
+        assert_eq!(LatticeError::name_error("FOO").to_string(), "#NAME?");
+        assert_eq!(LatticeError::na().to_string(), "#N/A");
     }
 
     #[test]

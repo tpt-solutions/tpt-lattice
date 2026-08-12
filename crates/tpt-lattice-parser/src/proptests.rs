@@ -17,6 +17,8 @@ fn cellref_strategy() -> impl Strategy<Value = Expr> {
         Expr::CellRef(CellRef {
             id: CellId::from_a1(&a1),
             a1,
+            abs_col: false,
+            abs_row: false,
         })
     })
 }
