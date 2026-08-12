@@ -14,6 +14,9 @@ Unsupported Excel formulas are not silently dropped or broken: they become expli
   booleans → `Boolean`, datetimes → `Text`, cell errors → `LatticeError::RefError`.
 - Excel formulas surface as `LatticeError::UnsupportedFormula`.
 - Best-effort named-range capture (`name → first referenced CellId`).
+- Merged-cell regions (`ImportedSheet::merged_cells`) parsed directly from the OOXML.
+- Basic per-cell styles (`ImportedSheet::styles`): bold, italic, horizontal/vertical
+  alignment, and number formats (built-in or custom `numFmt` codes).
 - Graceful failure (no panics) on malformed input.
 
 ## Installation
@@ -40,9 +43,10 @@ for (id, value) in &sheet.cells {
 
 ## Caveats
 
-- Only the first worksheet is imported by `import_first_sheet`; merged cells and styles are
-  not yet mapped.
+- Only the first worksheet is imported by `import_first_sheet`; use `import_sheet` for others.
 - Excel formulas are not evaluated; they are flagged as unsupported rather than translated.
+- Style extraction covers a basic subset (bold, italic, alignment, number format). Rich
+  formatting (fills, borders, fonts beyond bold/italic) is not represented.
 
 ## License
 

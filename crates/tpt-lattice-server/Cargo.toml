@@ -13,6 +13,7 @@ categories = ["network-programming", "web-programming"]
 [dependencies]
 axum = { workspace = true }
 tokio = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 futures-util = "0.3"
 tpt-lattice-crdt = { workspace = true }

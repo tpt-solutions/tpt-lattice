@@ -2,7 +2,7 @@
 //! `tests/generate_fixture.py` (run `py tests/generate_fixture.py` to rebuild it).
 
 use tpt_lattice_core::{CellId, CellValue, LatticeError};
-use tpt_lattice_import_xlsx::{import_first_sheet, import_sheet};
+use tpt_lattice_import_xlsx::{import_first_sheet, import_sheet, HorizontalAlign};
 
 const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/sample.xlsx");
 
@@ -54,6 +54,44 @@ fn named_ranges_are_captured() {
 }
 
 #[test]
+fn merged_cells_are_imported() {
+    let sheet = import_first_sheet(include_bytes!("../tests/fixtures/sample.xlsx")).unwrap();
+    assert!(
+        sheet.merged_cells.iter().any(|m| {
+            m.top_left == CellId::from_a1("B5") && m.bottom_right == CellId::from_a1("C6")
+        }),
+        "expected merged region B5:C6, got {:?}",
+        sheet.merged_cells
+    );
+}
+
+#[test]
+fn basic_styles_are_imported() {
+    let sheet = import_first_sheet(include_bytes!("../tests/fixtures/sample.xlsx")).unwrap();
+
+    let a5 = sheet.styles.get(&CellId::from_a1("A5"));
+    assert!(a5.map(|s| s.bold).unwrap_or(false), "A5 should be bold");
+
+    let a6 = sheet.styles.get(&CellId::from_a1("A6"));
+    assert!(a6.map(|s| s.italic).unwrap_or(false), "A6 should be italic");
+
+    let a7 = sheet.styles.get(&CellId::from_a1("A7"));
+    assert_eq!(
+        a7.and_then(|s| s.number_format.as_deref()),
+        Some("0.00"),
+        "A7 should carry the 0.00 number format"
+    );
+
+    let a8 = sheet.styles.get(&CellId::from_a1("A8"));
+    assert_eq!(
+        a8.and_then(|s| s.horizontal_align),
+        Some(HorizontalAlign::Center),
+        "A8 should be horizontally centered"
+    );
+}
+
+#[test]
+
 fn importing_by_name_matches_first_sheet() {
     let bytes = include_bytes!("../tests/fixtures/sample.xlsx");
     let first = import_first_sheet(bytes).unwrap();

@@ -40,7 +40,12 @@ export class SyncClient {
 
   constructor(private opts: SyncClientOptions) {
     this.actor = opts.actor ?? randomActor();
-    if (opts.actor !== undefined) void opts.engine.init(this.actor);
+    // Always assign the engine this replica's (random or supplied) actor id so
+    // the CRDT's last-writer-wins tie-break is deterministic per peer. The
+    // previous code only initialized the engine when an explicit actor was
+    // passed, so sessions that relied on the auto-generated id silently defaulted
+    // to the engine's hard-coded `actor=1`, breaking convergence.
+    void opts.engine.init(this.actor);
     this.connect();
   }
 
@@ -89,11 +94,15 @@ export class SyncClient {
     }
   }
 
-  private onMessage(e: MessageEvent) {
+    private onMessage(e: MessageEvent) {
     const op = JSON.parse(e.data as string) as Op;
     // Ignore our own ops echoed back by the server — they are already applied.
     if (opActor(op) === this.actor) return;
-    void this.opts.engine.applyOps([op]);
+    // A malformed remote op must not produce an unhandled promise rejection on
+    // every connected client; swallow and log it instead.
+    void this.opts.engine
+      .applyOps([op])
+      .catch((err) => console.warn("failed to apply remote op", err));
     this.opts.onRemoteOp?.(op);
   }
 

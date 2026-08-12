@@ -98,17 +98,26 @@ impl CellId {
         let bytes = s.as_bytes();
         let mut i = 0;
         // Leading column letters (bijective base-26: A=0, B=1, ... AA=26).
+        // Use checked arithmetic so 14+ letter columns overflow `u64` and are
+        // rejected as out-of-range rather than wrapping into a corrupted id.
         let mut column: u64 = 0;
+        let mut overflowed = false;
         while i < bytes.len() {
             let b = bytes[i];
             if !b.is_ascii_uppercase() && !b.is_ascii_lowercase() {
                 break;
             }
-            let digit = if b <= b'Z' { b - b'A' } else { b - b'a' };
-            column = column * 26 + (digit as u64 + 1);
+            let digit = if b <= b'Z' { b - b'A' } else { b - b'a' } as u64;
+            match column.checked_mul(26).and_then(|c| c.checked_add(digit + 1)) {
+                Some(v) => column = v,
+                None => overflowed = true,
+            }
             i += 1;
         }
         // Bijective base-26 has no zero digit, so values are 1-based; convert.
+        if overflowed {
+            column = u64::MAX; // guarantees > MAX_COLUMN below
+        }
         column = column.saturating_sub(1);
 
         if i == 0 {
@@ -205,6 +214,14 @@ mod tests {
     #[test]
     fn a1_whitespace_trimmed() {
         assert_eq!(CellId::try_from_a1("  C3  "), CellId::try_from_a1("C3"));
+    }
+
+    #[test]
+    fn a1_column_overflow_is_rejected() {
+        // 14+ letter columns overflow u64 (and wasm32 usize) — must error rather
+        // than panic or wrap into a corrupted CellId.
+        assert!(CellId::try_from_a1("AAAAAAAAAAAAAA1").is_err());
+        assert!(CellId::try_from_a1("ZZZZZZZZZZZZZZ1").is_err());
     }
 
     #[test]

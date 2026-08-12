@@ -312,8 +312,12 @@ fn expand_range(start: &CellRef, end: &CellRef, out: &mut Vec<CellId>) -> Result
     let (ec, er) = end.id.to_rc();
     let (c0, c1) = (sc.min(ec), sc.max(ec));
     let (r0, r1) = (sr.min(er), sr.max(er));
-    let count = (c1 - c0 + 1) as usize * (r1 - r0 + 1) as usize;
-    if count > MAX_RANGE_CELLS {
+    // Compute the cell count in u128 so a wide column×row span can never
+    // overflow (u64/usize) and silently bypass MAX_RANGE_CELLS (especially
+    // dangerous on wasm32, where usize is 32-bit).
+    let cols = (c1 - c0 + 1) as u128;
+    let rows = (r1 - r0 + 1) as u128;
+    if cols * rows > MAX_RANGE_CELLS as u128 {
         return Err(LatticeError::argument_error("RANGE spans too many cells"));
     }
     for r in r0..=r1 {

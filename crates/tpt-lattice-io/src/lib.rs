@@ -75,8 +75,8 @@ impl SerializableGrid {
     /// Build a snapshot from anything implementing [`tpt_lattice_core::GridState`].
     pub fn from_grid<G: tpt_lattice_core::GridState>(grid: &G) -> Self {
         let mut out = SerializableGrid::new();
-        for id in grid_snapshot(grid) {
-            out.set(id, grid.get_cell(id));
+        for (id, value) in grid.iter_cells() {
+            out.set(id, value);
         }
         out
     }
@@ -95,20 +95,9 @@ impl tpt_lattice_core::GridState for SerializableGrid {
     fn set_cell(&mut self, id: CellId, value: CellValue) {
         self.set(id, value);
     }
-}
-
-/// Enumerate the non-empty cells of a grid by probing a bounded coordinate range.
-fn grid_snapshot<G: tpt_lattice_core::GridState>(grid: &G) -> Vec<CellId> {
-    let mut ids = Vec::new();
-    for row in 0..1024u64 {
-        for col in 0..1024u64 {
-            let id = CellId::from_rc(col, row);
-            if grid.has_cell(id) {
-                ids.push(id);
-            }
-        }
+    fn iter_cells(&self) -> Vec<(CellId, CellValue)> {
+        self.iter().map(|(id, v)| (id, v.clone())).collect()
     }
-    ids
 }
 
 /// Serialize a snapshot to MessagePack.

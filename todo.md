@@ -4,10 +4,14 @@
 > **License:** MIT OR Apache-2.0
 > **Status (2026-08-12):** The Rust workspace compiles, all non-wasm crates pass `cargo test`, the wasm
 > crate builds to `wasm32-unknown-unknown` and evaluates end-to-end (`B1 == 42`), CI is in place, the
-> `tpt-lattice-import-xlsx` crate has real-fixture tests, and the **Phase 4 SolidJS + Canvas frontend
-> builds and bundles** (`npm run build` → `dist/` with the engine worker + wasm asset). Remaining work:
-> the TypeScript sync client, IndexedDB offline queue, merged-cells/styles import, crates.io publication,
-> and the `v0.1.0` tag/release.
+> `tpt-lattice-import-xlsx` crate has real-fixture tests, the **Phase 4 SolidJS + Canvas frontend
+> builds and bundles** (`npm run build` → `dist/` with the engine worker + wasm asset), the **Phase 3
+> sync layer is implemented and tested** (TypeScript `SyncClient`, IndexedDB `OpLog` offline queue,
+> reconnect replay with server history reconciliation, and a convergence test), and **merged cells +
+> basic styles import** is implemented. Remaining work: crates.io publication and the `v0.1.0` tag/release
+> (both require a crates.io token / push, which are auth-gated), plus a large backlog captured below
+> from a full platform review (2026-08-12) — critical correctness/security bugs, formula-language and
+> UI/UX gaps, accessibility, import/export, CI, adoption/onboarding, and innovative-feature ideas.
 
 ---
 
@@ -72,10 +76,10 @@
 
 ### Sync Infrastructure
 - [x] Build minimal Axum WebSocket server (`tpt-lattice-server`): broadcast ops to all peers
-- [ ] Implement `tpt-lattice-sync-client` TypeScript module
-- [ ] Implement IndexedDB-backed offline op queue (ops persist across page reloads)
-- [ ] Implement op replay on reconnect; server reconciles diverged histories
-- [ ] End-to-end convergence test: two browser tabs edit offline, sync, reach identical state
+- [x] Implement `tpt-lattice-sync-client` TypeScript module
+- [x] Implement IndexedDB-backed offline op queue (ops persist across page reloads)
+- [x] Implement op replay on reconnect; server reconciles diverged histories
+- [x] End-to-end convergence test: two browser tabs edit offline, sync, reach identical state
 
 ---
 
@@ -127,12 +131,181 @@ with the engine worker and `tpt_lattice_wasm_bg.wasm` asset. Run `npm run dev` t
 - [x] Map unsupported Excel formulas → `Error(LatticeError::UnsupportedFormula)`
 - [x] Map named ranges (best-effort via `defined_names`)
 - [x] Write import tests against real `.xlsx` fixture files (`tests/fixtures/sample.xlsx` + `tests/import.rs`)
-- [ ] Map merged cells and basic styles
+- [x] Map merged cells and basic styles
 
 ### Publication & Docs
 - [x] Write `cargo doc`-quality documentation for all public APIs
 - [x] Write per-crate `README.md` with usage examples (all 8 crates + root)
 - [x] Write per-crate `CHANGELOG.md` (all 8 crates + root)
 - [x] Set up CI (GitHub Actions): `cargo test`, `cargo clippy`, `wasm-pack test`
-- [ ] Publish crates to crates.io in dependency order (core → parser → evaluator → ...)
-- [ ] Tag `v0.1.0` release; publish GitHub release notes
+- [ ] Publish crates to crates.io in dependency order (core → parser → evaluator → ...) — *packaging validated via `cargo publish --dry-run`; blocked on crates.io token + ordered publish*
+- [ ] Tag `v0.1.0` release; publish GitHub release notes — *blocked on push to remote*
+
+---
+
+## Phase 6 — Correctness & Reliability Fixes (Critical)
+
+> Found in a full platform review (2026-08-12). These affect data correctness or can
+> crash/hang the app on ordinary-looking input.
+
+- [x] Fix CRDT actor-id collision: `SyncClient` never passes an `actor` to `engine.init`, so
+      every browser session defaults to the wasm engine's hard-coded `actor=1`, which breaks
+      deterministic LWW convergence between concurrent peers (ties resolve by merge order,
+      not by a real per-peer identity)
+- [x] Fix `RANGE` cell-count integer overflow: the `count` guard in `expand_range`
+      (duplicated in `dag.rs` and `eval.rs`) can overflow `u64`/`usize` for large
+      column×row spans, silently bypassing `MAX_RANGE_CELLS` and looping ~2^64 times
+      (worse on wasm32, where `usize` is 32-bit and the threshold is trivially reachable)
+- [x] Fix `CellId::try_from_a1` unbounded column-letter accumulator overflow (panics or
+      wraps to a corrupted `CellId` on 14+ consecutive letters immediately followed by
+      digits, e.g. `AAAAAAAAAAAAAA1`)
+- [x] Call `CellValue::sanitize()` on evaluated formula results in `Evaluator::evaluate`
+      (currently only `set_value` sanitizes) so `NaN`/`Infinity` from `SQRT(-1)`,
+      `POW`/`ROUND` edge cases, or `1e400` literals can't leak into the grid
+- [x] Fix circular-reference fallout: cells that depend on a cycle member currently
+      evaluate against stale/old values instead of erroring, and are never re-marked dirty
+      to self-correct later
+- [x] Make structural CRDT ops (`InsertRow`/`DeleteRow`/`InsertColumn`/`DeleteColumn`)
+      causally ordered like `SetCell`/`DeleteCell` — concurrent structural edits currently
+      diverge across peers depending on local apply order
+- [x] Connect row/column ULID identity lists to actual cell storage — insert/delete
+      row/column is currently inert (cells never shift), and delete never cascades or
+      tombstones the cells that lived at the deleted position
+- [x] Replace the hardcoded `0..1024 x 0..1024` rescan in `crdt_cells()` (wasm) and
+      `grid_snapshot()` (`tpt-lattice-io`) with an approach that doesn't silently drop data
+      outside that window and doesn't re-scan ~1M cells on every mutation
+- [x] Add recovery from wasm-engine mutex poisoning — a panic while the lock is held
+      currently bricks the engine permanently until a full page reload
+- [x] Call `DependencyGraph::remove` when a cell is cleared, or otherwise prune dead graph
+      nodes — currently every cell ever touched permanently occupies a graph node
+
+## Phase 7 — Security & Server Hardening
+
+- [x] Add authentication/authorization to the `/ws` endpoint (currently open to anyone who
+      can reach the port)
+- [x] Add CORS/Origin checks on the WebSocket upgrade; support `wss://` (currently
+      hardcoded plaintext `ws://127.0.0.1:8080/ws` with no origin validation)
+- [x] Add a rooms/documents concept — the server currently has one global broadcast channel
+      and one history vec for the entire process, so all clients share one document
+- [x] Add rate limiting and per-message/per-connection size limits
+- [x] Validate inbound messages as real `Op`s, not just "is this JSON" — malformed/garbage
+      payloads currently get stored in history forever and rebroadcast to every peer
+- [x] Add durable persistence for server history (currently pure in-memory; a restart or
+      crash loses every document irrecoverably, contradicting the persistence design in
+      `spec.txt`)
+- [x] Add snapshot/compaction for op history so reconnect cost doesn't grow unboundedly
+      with a document's lifetime edit count
+- [x] Attach `.catch()` handling in `SyncClient.onMessage`'s `applyOps` call so a malformed
+      remote op doesn't produce an unhandled promise rejection on every connected client
+
+## Phase 8 — Formula Language Gaps (LES)
+
+- [ ] Add lookup functions: `VLOOKUP`/`HLOOKUP`/`INDEX`/`MATCH`-style lookup/`XLOOKUP`
+- [ ] Add conditional aggregates: `SUMIF`/`COUNTIF`/`AVERAGEIF`/`SUMIFS`
+- [ ] Add `IFERROR`/`IFNA` convenience wrappers (today only the verbose `MATCH` Ok/Err form
+      covers this)
+- [ ] Add predicates: `ISBLANK`/`ISERROR`/`ISNUMBER`/`ISTEXT`/`ISNA`
+- [ ] Add string functions: `UPPER`/`LOWER`/`TRIM`/`LEFT`/`RIGHT`/`MID`/`FIND`/`SUBSTITUTE`/
+      `REPLACE`/`SPLIT`, and a `&` string-concatenation operator
+- [ ] Add a `CellValue::Date`/time type plus `DATE`/`TODAY`/`NOW`/`YEAR`/`MONTH`/`DAY`/
+      `DATEDIF`
+- [ ] Add statistics functions: `MEDIAN`/`STDEV`/`VAR`/`MODE`/`RANK`/`PERCENTILE`
+- [ ] Add named ranges / reusable formulas (resolve the parser ambiguity where any
+      `[A-Za-z]+[0-9]+`-shaped identifier is always parsed as a `CellRef` first)
+- [ ] Add absolute reference syntax (`$A$1`) and fill/copy semantics
+- [ ] Add multi-sheet / 3D references (`Sheet1!A1`) at the core/parser/evaluator level
+- [ ] Switch error display to familiar Excel-style codes (`#DIV/0!`, `#REF!`, `#VALUE!`,
+      `#NAME?`) instead of prose messages
+- [ ] Make `SUM`/aggregate functions error on non-numeric args instead of silently skipping
+      them, for consistency with LES's strict-typing philosophy
+- [ ] Support 2-argument `IF` (implicit empty/`FALSE` else-branch)
+- [ ] Fix the misleading "RANGE used outside of a function argument" error, which fires even
+      when `RANGE` is inside a function argument that just isn't one of the special-cased
+      aggregates
+- [ ] De-duplicate `expand_range`, currently copy-pasted identically in `dag.rs` and
+      `eval.rs`
+
+## Phase 9 — Missing UI/UX Features
+
+- [ ] Undo/redo
+- [ ] Copy/paste (clipboard integration)
+- [ ] Right-click context menu
+- [ ] Column/row resize (currently hardcoded fixed geometry in `grid/metrics.ts`)
+- [ ] Freeze panes
+- [ ] Find/replace
+- [ ] Make cell formatting real — Toolbar's bold/italic/number-format/alignment buttons are
+      currently visual-only stubs with no evaluator/render effect
+- [ ] Make multi-sheet support real — `SheetTabs` is currently a local-UI-only stub with no
+      engine backing (only one `LatticeEngine`/`CrdtStore` ever exists)
+- [ ] Add row/column insert/delete UI, wired to the CRDT ops once the Phase 6 structural-op
+      bugs are fixed
+- [ ] Fix formula bar to commit on blur (currently only commits on Enter, silently
+      discarding edits if the user clicks away)
+- [ ] Add keyboard nav: Home/End/PageUp/PageDown/Ctrl+Arrow jump-to-edge
+- [ ] Add header-click row/column selection
+- [ ] Add presence: show other users' cursors/selections
+- [ ] Add conflict UI: surface "this cell changed remotely" instead of silently repainting
+      on every remote op
+
+## Phase 10 — Accessibility
+
+- [ ] Add ARIA grid semantics (`role="grid"`/`role="gridcell"`) or a parallel accessible DOM
+      tree — the grid is currently a bare `<canvas>` with no ARIA attributes at all
+- [ ] Add a live region announcing active-cell/selection/value changes
+- [ ] Add non-color error indicators (icon/pattern) alongside the existing text `#Error`
+- [ ] Document and test a full keyboard-only workflow
+
+## Phase 11 — Import/Export
+
+- [ ] Add `.xlsx` export (currently import-only; no `tpt-lattice-export-xlsx` exists)
+- [ ] Translate supported Excel formulas into LES on import instead of only flagging them as
+      `LatticeError::UnsupportedFormula`
+- [ ] Add an "import all sheets" helper (currently only the first sheet, or one named sheet
+      at a time)
+- [ ] Preserve a real date type on import instead of flattening `Data::DateTime`/
+      `DateTimeIso` to `CellValue::Text`
+- [ ] Extend style import beyond bold/italic/alignment/number-format to fonts, colors,
+      borders, and fills
+- [ ] Add a version/schema field to `tpt-lattice-io`'s `SerializableGrid` format for
+      forward/backward compatibility as `CellValue`/`CellId` evolve
+- [ ] Persist formulas (not just computed values) in the io format, or provide a companion
+      mechanism — reloading a saved snapshot today turns a live sheet into dead values
+
+## Phase 12 — CI/Tooling
+
+- [ ] Add a frontend CI job: `npm install`, `typecheck`, `test` (vitest), `build` — none of
+      this currently runs in CI even though the tests exist
+- [ ] Make CI actually run `wasm-pack test` — `todo.md` currently claims this is done, but
+      the `wasm` job only builds the package, it never runs tests
+- [ ] Add `cargo audit`/`npm audit`/Dependabot for dependency vulnerability tracking
+- [ ] Add tag-triggered release automation: ordered crates.io publish + GitHub Release notes
+- [ ] Add a cross-platform CI matrix (currently `ubuntu-latest` only)
+- [ ] Add ESLint/Prettier config for the frontend (currently only `tsc --noEmit`)
+
+## Phase 13 — Adoption: Examples, Templates & Onboarding
+
+- [ ] Add a root-level quick start for running the *full* collaborative app (frontend +
+      wasm build + server) — the current README quick start only covers the headless engine
+- [ ] Wire the wasm build into the frontend's `npm run dev`/`build` scripts (e.g.
+      `predev`/`prebuild`) so setup is one command instead of a manual multi-step process
+- [ ] Add a Docker Compose file or devcontainer for one-command environment setup
+- [ ] Add sample/template spreadsheets (e.g. budget, project tracker) loadable from the UI
+- [ ] Add a `CONTRIBUTING.md`
+- [ ] Add a hosted live demo / CI-published preview build
+- [ ] Add an in-app LES formula cheat-sheet/reference, since LES syntax deliberately departs
+      from Excel conventions and new users will need a bridge
+
+## Innovative additions (new ideas)
+
+- [ ] Time-travel / version-history UI built on the existing CRDT op log (scrub back through
+      edit history, restore a prior state)
+- [ ] Git-style diff/merge view between two sheet versions
+- [ ] "What-if" branching: fork a sheet, experiment, merge back
+- [ ] AI-assisted formula authoring: natural-language-to-LES translation, hover
+      explain/lint on formulas
+- [ ] Sandboxed user-defined functions via a wasm plugin model for power users
+- [ ] In-app formula unit tests: let users assert expected values for cells/ranges as a
+      "check sheet" action
+- [ ] Dependency-graph visualizer surfacing the DAG that already exists in
+      `tpt-lattice-evaluator`, to help users understand/debug complex sheets
+- [ ] Community template gallery/marketplace for shared sheet templates

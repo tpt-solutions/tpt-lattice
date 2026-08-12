@@ -26,6 +26,14 @@ pub trait GridState {
     fn has_cell(&self, id: CellId) -> bool {
         !self.get_cell(id).is_empty()
     }
+
+    /// Enumerate the currently stored `(CellId, CellValue)` pairs.
+    ///
+    /// This is the preferred way to materialize a grid: implementors with an
+    /// index return exactly their populated cells, so callers neither rescan a
+    /// bounded coordinate window (which silently drops out-of-window data) nor
+    /// loop over millions of empty coordinates.
+    fn iter_cells(&self) -> alloc::vec::Vec<(CellId, CellValue)>;
 }
 
 #[cfg(test)]
@@ -50,6 +58,12 @@ mod tests {
             } else {
                 self.cells.insert(id.to_bits(), value);
             }
+        }
+        fn iter_cells(&self) -> alloc::vec::Vec<(CellId, CellValue)> {
+            self.cells
+                .iter()
+                .map(|(&bits, v)| (CellId::from_bits(bits), v.clone()))
+                .collect()
         }
     }
 

@@ -11,6 +11,10 @@ use std::io::Cursor;
 use calamine::{Data, Reader, Xlsx};
 use tpt_lattice_core::{CellId, CellValue, LatticeError};
 
+mod xlsx;
+
+pub use xlsx::{CellStyle, HorizontalAlign, MergedRegion, VerticalAlign};
+
 /// Errors that can occur while importing a workbook.
 #[derive(Debug)]
 pub enum ImportError {
@@ -44,6 +48,10 @@ pub struct ImportedSheet {
     pub cells: BTreeMap<CellId, CellValue>,
     /// Named ranges discovered in the workbook (`name -> first cell`).
     pub named_ranges: BTreeMap<String, CellId>,
+    /// Merged-cell regions, each described by its bounding `CellId`s.
+    pub merged_cells: Vec<MergedRegion>,
+    /// Per-cell styling carried over from the workbook, keyed by `CellId`.
+    pub styles: BTreeMap<CellId, CellStyle>,
 }
 
 /// Import the **first** worksheet of an `.xlsx` workbook.
@@ -113,6 +121,9 @@ pub fn import_sheet(bytes: &[u8], sheet_name: &str) -> Result<ImportedSheet, Imp
             }
         }
     }
+
+    // Carry merged-cell regions and per-cell styles through from the raw XML.
+    xlsx::attach_styles_and_merges(bytes, sheet_name, &mut sheet);
 
     Ok(sheet)
 }

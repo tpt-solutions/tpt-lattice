@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use tpt_lattice_core::{CellId, CellValue, GridState};
+use tpt_lattice_core::{CellId, CellValue};
 
 /// A sparse grid backed by a `HashMap<CellId, CellValue>`.
 ///
@@ -38,7 +38,7 @@ impl InMemoryGrid {
     }
 }
 
-impl GridState for InMemoryGrid {
+impl tpt_lattice_core::GridState for InMemoryGrid {
     fn get_cell(&self, id: CellId) -> CellValue {
         self.cells.get(&id).cloned().unwrap_or(CellValue::Empty)
     }
@@ -53,5 +53,12 @@ impl GridState for InMemoryGrid {
 
     fn has_cell(&self, id: CellId) -> bool {
         self.cells.contains_key(&id)
+    }
+
+    fn iter_cells(&self) -> Vec<(CellId, CellValue)> {
+        self.cells
+            .iter()
+            .map(|(&id, v)| (id, v.clone()))
+            .collect()
     }
 }

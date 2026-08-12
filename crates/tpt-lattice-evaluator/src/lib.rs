@@ -78,8 +78,12 @@ fn expand_range(start: &CellRef, end: &CellRef, out: &mut Vec<CellId>) -> Result
     let (ec, er) = end.id.to_rc();
     let (c0, c1) = (sc.min(ec), sc.max(ec));
     let (r0, r1) = (sr.min(er), sr.max(er));
-    let count = (c1 - c0 + 1) as usize * (r1 - r0 + 1) as usize;
-    if count > MAX_RANGE_CELLS {
+    // Compute the cell count in u128 so a wide column×row span can never
+    // overflow (u64/usize) and silently bypass MAX_RANGE_CELLS (especially
+    // dangerous on wasm32, where usize is 32-bit).
+    let cols = (c1 - c0 + 1) as u128;
+    let rows = (r1 - r0 + 1) as u128;
+    if cols * rows > MAX_RANGE_CELLS as u128 {
         return Err(LatticeError::argument_error("RANGE spans too many cells"));
     }
     for row in r0..=r1 {
@@ -100,8 +104,15 @@ impl Evaluator {
     /// attached to `id` is removed and all dependents are marked dirty.
     pub fn set_value(&mut self, id: CellId, value: CellValue) {
         self.formulas.remove(&id);
-        self.dag.set_dependencies(id, &[]);
-        self.values.insert(id, value.sanitize());
+        if value.is_empty() {
+            // The cell is being cleared: prune it entirely from the DAG so it
+            // does not permanently occupy a graph node, and drop its value.
+            self.dag.remove(id);
+            self.values.remove(&id);
+        } else {
+            self.dag.set_dependencies(id, &[]);
+            self.values.insert(id, value.sanitize());
+        }
         self.mark_dirty(id);
     }
 
@@ -149,6 +160,19 @@ impl Evaluator {
     /// is evaluated top-down so dependency values are resolved first.
     pub fn evaluate(&mut self) -> Result<(), LatticeError> {
         let cycle_cells = self.dag.cycle_cells();
+
+        // Mark cycle members as errors *first* so that dependents which read a
+        // cycle member during this pass see the error and propagate it, rather
+        // than evaluating against a stale (previously-good) value.
+        for id in &cycle_cells {
+            if self.dirty.contains(id) {
+                self.values.insert(
+                    *id,
+                    CellValue::Error(LatticeError::CircularReference(id.to_a1())),
+                );
+            }
+        }
+
         let order = self.dag.topo_order_excluding(&cycle_cells);
 
         let mut env: HashMap<String, CellValue> = HashMap::new();
@@ -157,16 +181,8 @@ impl Evaluator {
                 continue;
             }
             if let Some(formula) = self.formulas.get(&id) {
-                let value = eval_expr(&formula.body, self, &mut env);
+                let value = eval_expr(&formula.body, self, &mut env).sanitize();
                 self.values.insert(id, value);
-            }
-        }
-        for id in &cycle_cells {
-            if self.dirty.contains(id) {
-                self.values.insert(
-                    *id,
-                    CellValue::Error(LatticeError::CircularReference(id.to_a1())),
-                );
             }
         }
         self.dirty.clear();
@@ -192,6 +208,13 @@ impl GridState for Evaluator {
 
     fn has_cell(&self, id: CellId) -> bool {
         self.values.contains_key(&id)
+    }
+
+    fn iter_cells(&self) -> Vec<(CellId, CellValue)> {
+        self.values
+            .iter()
+            .map(|(&id, v)| (id, v.clone()))
+            .collect()
     }
 }
 
@@ -237,6 +260,37 @@ mod tests {
         e.evaluate().unwrap();
         assert!(e.get_value(cell("A1")).is_error());
         assert!(e.get_value(cell("B1")).is_error());
+    }
+
+    #[test]
+    fn dependent_of_cycle_errors_instead_of_stale() {
+        // C1 depends on A1 which is part of a cycle. It must surface the
+        // circular-reference error rather than evaluating against a stale value.
+        let mut e = Evaluator::new();
+        e.set_formula(cell("A1"), "=B1 + 1").unwrap();
+        e.set_formula(cell("B1"), "=A1 + 1").unwrap();
+        e.set_formula(cell("C1"), "=A1 + 1").unwrap();
+        e.evaluate().unwrap();
+        assert!(e.get_value(cell("A1")).is_error());
+        assert!(e.get_value(cell("B1")).is_error());
+        assert!(e.get_value(cell("C1")).is_error());
+    }
+
+    #[test]
+    fn non_finite_results_are_sanitized() {
+        // SQRT of a negative number yields NaN; it must be stored as an error
+        // rather than leaking a non-finite number into the grid.
+        let mut e = Evaluator::new();
+        e.set_value(cell("A1"), CellValue::Number(-1.0));
+        e.set_formula(cell("B1"), "=SQRT(A1)").unwrap();
+        e.evaluate().unwrap();
+        assert!(e.get_value(cell("B1")).is_error());
+
+        // A literal that parses to infinity must also be sanitized.
+        let mut e2 = Evaluator::new();
+        e2.set_formula(cell("A1"), "=1e400").unwrap();
+        e2.evaluate().unwrap();
+        assert!(e2.get_value(cell("A1")).is_error());
     }
 
     #[test]

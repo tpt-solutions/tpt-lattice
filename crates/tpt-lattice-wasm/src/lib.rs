@@ -16,7 +16,7 @@
 //! ```
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 use tpt_lattice_core::{CellId, CellValue};
 use tpt_lattice_evaluator::Evaluator;
@@ -103,7 +103,7 @@ impl LatticeEngine {
             Ok(r) => r,
             Err(e) => return error_response(&e.to_string()),
         };
-        let mut state = self.state.lock().unwrap();
+        let mut state = lock_state(&self.state);
         let resp = match req {
             Request::SetCell { cell, value } => match CellId::try_from_a1(&cell) {
                 Ok(id) => {
@@ -210,7 +210,7 @@ pub fn set_cells_json(engine: &LatticeEngine, cells_json: &str) -> String {
         Ok(m) => m,
         Err(e) => return error_response(&e.to_string()),
     };
-    let mut state = engine.state.lock().unwrap();
+    let mut state = lock_state(&engine.state);
     for (cell, value) in map {
         if let Ok(id) = CellId::try_from_a1(&cell) {
             let clock = state.crdt.clock().clone();
@@ -228,18 +228,20 @@ pub fn set_cells_json(engine: &LatticeEngine, cells_json: &str) -> String {
 }
 
 fn crdt_cells(crdt: &CrdtStore) -> Vec<(CellId, CellValue)> {
-    // Drain all non-empty cells from the CRDT store via its GridState impl.
-    let mut out = Vec::new();
-    for row in 0..1024u64 {
-        for col in 0..1024u64 {
-            let id = CellId::from_rc(col, row);
-            let v = crdt.get_cell(id);
-            if !v.is_empty() {
-                out.push((id, v));
-            }
-        }
+    // Materialize every non-empty cell from the CRDT store directly, rather than
+    // probing a bounded coordinate window (which silently dropped cells outside
+    // 0..1024 and rescanned ~1M coordinates on every mutation).
+    crdt.iter_cells()
+}
+
+/// Acquire the engine lock, recovering from poisoning. A panic that occurred
+/// while the lock was held would otherwise permanently brick the engine until a
+/// full page reload; recovering lets the engine keep serving subsequent requests.
+fn lock_state(state: &Mutex<State>) -> MutexGuard<'_, State> {
+    match state.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
     }
-    out
 }
 
 fn error_response(message: &str) -> String {
