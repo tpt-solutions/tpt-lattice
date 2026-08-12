@@ -1,0 +1,35 @@
+# One-command environment for TPT Lattice.
+#
+# Full collaborative stack: the Axum WebSocket sync server + the compiled wasm
+# engine + the SolidJS frontend served over nginx.
+#
+#   docker compose up --build
+#
+# Then open http://localhost:8080 (frontend) — it talks to the sync server at
+# ws://localhost:8080/ws via the nginx proxy below.
+
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    command: cargo run -p tpt-lattice-server
+    ports:
+      - "8080:8080"
+    develop:
+      watch:
+        - action: rebuild
+          path: crates
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "5173:80"
+    depends_on:
+      - server
+    develop:
+      watch:
+        - action: rebuild
+          path: frontend

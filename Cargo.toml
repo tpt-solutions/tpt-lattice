@@ -7,6 +7,7 @@ members = [
     "crates/tpt-lattice-crdt",
     "crates/tpt-lattice-io",
     "crates/tpt-lattice-import-xlsx",
+    "crates/tpt-lattice-export-xlsx",
     "crates/tpt-lattice-wasm",
     "crates/tpt-lattice-server",
 ]

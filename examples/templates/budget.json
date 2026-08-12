@@ -1,0 +1,29 @@
+{
+  "name": "Monthly Budget",
+  "cells": {
+    "A1": { "Text": "Monthly Budget" },
+    "A3": { "Text": "Income" },
+    "A4": { "Text": "  Salary" },
+    "B4": { "Number": 4000 },
+    "A5": { "Text": "  Freelance" },
+    "B5": { "Number": 750 },
+    "A7": { "Text": "Expenses" },
+    "A8": { "Text": "  Rent" },
+    "B8": { "Number": 1500 },
+    "A9": { "Text": "  Groceries" },
+    "B9": { "Number": 600 },
+    "A10": { "Text": "  Transport" },
+    "B10": { "Number": 200 },
+    "A12": { "Text": "Total income" },
+    "B12": { "Number": 4750 },
+    "A13": { "Text": "Total expenses" },
+    "B13": { "Number": 2300 },
+    "A15": { "Text": "Net" },
+    "B15": { "Number": 2450 }
+  },
+  "formulas": {
+    "B12": "=B4 + B5",
+    "B13": "=B8 + B9 + B10",
+    "B15": "=B12 - B13"
+  }
+}

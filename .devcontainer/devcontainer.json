@@ -1,0 +1,20 @@
+{
+  "name": "TPT Lattice Dev",
+  "image": "mcr.microsoft.com/devcontainers/rust:1.84",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "20" }
+  },
+  "onCreateCommand": "rustup target add wasm32-unknown-unknown && cargo install wasm-pack --locked",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "solidjs.solidjs"
+      ]
+    }
+  },
+  "remoteEnv": {
+    "CARGO_TERM_COLOR": "always"
+  }
+}

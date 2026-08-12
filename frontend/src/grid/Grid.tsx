@@ -1,8 +1,10 @@
 import { Accessor, createEffect, onCleanup, onMount } from "solid-js";
 import type { SetStoreFunction } from "solid-js/store";
 import type { GridStore } from "../store";
+import { toA1 } from "./coords";
 import { CellEditor } from "./CellEditor";
 import { drawGrid } from "./renderer";
+import { keyboardNavigate } from "./keyboard";
 import {
   HEADER_H,
   HEADER_W,
@@ -245,69 +247,31 @@ export function Grid(props: GridProps) {
     if (props.store.editing) return; // editor handles its own keys
     const pageRows = Math.max(1, Math.floor((props.viewH() - HEADER_H) / DEFAULT_ROW_H));
 
-    if (e.key === "Home") {
+    // Compute the furthest populated coordinate for Ctrl+End.
+    let lastCol = a.col;
+    let lastRow = a.row;
+    for (const k of Object.keys(props.store.cells)) {
+      const [c, r] = k.split(",").map(Number);
+      if (c > lastCol) lastCol = c;
+      if (r > lastRow) lastRow = r;
+    }
+
+    const next = keyboardNavigate({
+      active: a,
+      key: e.key,
+      ctrlKey: e.ctrlKey || e.metaKey,
+      pageRows,
+      hasData,
+      lastCol,
+      lastRow,
+    });
+    if (next) {
       e.preventDefault();
-      if (e.ctrlKey) props.setActiveCell(0, 0);
-      else props.setActiveCell(0, a.row);
+      props.setActiveCell(next.col, next.row);
       return;
     }
-    if (e.key === "End") {
-      e.preventDefault();
-      if (e.ctrlKey) {
-        let mc = a.col;
-        let mr = a.row;
-        for (const k of Object.keys(props.store.cells)) {
-          const [c, r] = k.split(",").map(Number);
-          if (c > mc) mc = c;
-          if (r > mr) mr = r;
-        }
-        props.setActiveCell(mc, mr);
-      } else {
-        let c = a.col;
-        while (hasData(c + 1, a.row)) c++;
-        props.setActiveCell(c, a.row);
-      }
-      return;
-    }
-    if (e.key === "PageUp") {
-      e.preventDefault();
-      props.setActiveCell(a.col, Math.max(0, a.row - pageRows));
-      return;
-    }
-    if (e.key === "PageDown") {
-      e.preventDefault();
-      props.setActiveCell(a.col, a.row + pageRows);
-      return;
-    }
-    if (e.ctrlKey && (e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "ArrowLeft" || e.key === "ArrowRight")) {
-      e.preventDefault();
-      let c = a.col;
-      let r = a.row;
-      if (e.key === "ArrowUp") {
-        while (r > 0 && hasData(c, r - 1)) r--;
-      } else if (e.key === "ArrowDown") {
-        while (hasData(c, r + 1)) r++;
-      } else if (e.key === "ArrowLeft") {
-        while (c > 0 && hasData(c - 1, r)) c--;
-      } else {
-        while (hasData(c + 1, r)) c++;
-      }
-      props.setActiveCell(c, r);
-      return;
-    }
-    if (e.key === "ArrowUp") {
-      props.setActiveCell(a.col, Math.max(0, a.row - 1));
-      e.preventDefault();
-    } else if (e.key === "ArrowDown") {
-      props.setActiveCell(a.col, a.row + 1);
-      e.preventDefault();
-    } else if (e.key === "ArrowLeft") {
-      props.setActiveCell(Math.max(0, a.col - 1), a.row);
-      e.preventDefault();
-    } else if (e.key === "ArrowRight") {
-      props.setActiveCell(a.col + 1, a.row);
-      e.preventDefault();
-    } else if (e.key === "Enter" || e.key === "F2") {
+
+    if (e.key === "Enter" || e.key === "F2") {
       props.beginEdit();
       e.preventDefault();
     } else if (e.key === "Delete" || e.key === "Backspace") {
@@ -334,6 +298,9 @@ export function Grid(props: GridProps) {
       ref={container}
       style={{ position: "relative", flex: "1 1 auto", overflow: "hidden", outline: "none" }}
       tabindex={0}
+      role="grid"
+      aria-label="Spreadsheet"
+      aria-activedescendant={`cell-${toA1(props.store.active.col, props.store.active.row)}`}
       onWheel={onWheel}
       onMouseDown={onMouseDown}
       onMouseMove={(e) => {

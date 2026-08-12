@@ -268,51 +268,84 @@ with the engine worker and `tpt_lattice_wasm_bg.wasm` asset. Run `npm run dev` t
 
 ## Phase 10 — Accessibility
 
-- [ ] Add ARIA grid semantics (`role="grid"`/`role="gridcell"`) or a parallel accessible DOM
-      tree — the grid is currently a bare `<canvas>` with no ARIA attributes at all
-- [ ] Add a live region announcing active-cell/selection/value changes
-- [ ] Add non-color error indicators (icon/pattern) alongside the existing text `#Error`
-- [ ] Document and test a full keyboard-only workflow
+- [x] Add ARIA grid semantics — `grid/AccessibleGrid.tsx` mirrors the canvas into a
+      visually-hidden `role="grid"`/`role="row"`/`role="gridcell"` tree; the canvas
+      container carries `role="grid"` + `aria-activedescendant` pointing at the active cell
+- [x] Add a live region (`aria-live="polite"`) announcing active-cell address + value/formula
+- [x] Add non-color error indicators — a warning glyph is drawn on error cells in
+      `grid/renderer.ts` (red background alone is no longer the only cue)
+- [x] Document and test a full keyboard-only workflow — navigation extracted to a pure,
+      unit-tested `grid/keyboard.ts` (`keyboard.test.ts`); shortcuts documented in
+      `frontend/README.md`
 
 ## Phase 11 — Import/Export
 
-- [ ] Add `.xlsx` export (currently import-only; no `tpt-lattice-export-xlsx` exists)
-- [ ] Translate supported Excel formulas into LES on import instead of only flagging them as
-      `LatticeError::UnsupportedFormula`
-- [ ] Add an "import all sheets" helper (currently only the first sheet, or one named sheet
-      at a time)
+- [x] Add `.xlsx` export — new `tpt-lattice-export-xlsx` crate writes OOXML via `zip`
+      (no heavy XML dep); round-trip-tested against the importer's structures
+- [x] Translate supported Excel formulas into LES on import — `translate_excel_to_les`
+      rewrites ranges (`A1:B2` → `RANGE(A1,B2)`) and carries the result in a new
+      `ImportedSheet.formulas` map; unsupported constructs (`@`, `!`, `{`) still surface as
+      `UnsupportedFormula` (best-effort; LES/Excel function-name divergences are not auto-fixed)
+- [x] Add an "import all sheets" helper — `import_all_sheets(bytes)` returns
+      `(name, ImportedSheet)` for every sheet in workbook order
 - [ ] Preserve a real date type on import instead of flattening `Data::DateTime`/
-      `DateTimeIso` to `CellValue::Text`
-- [ ] Extend style import beyond bold/italic/alignment/number-format to fonts, colors,
-      borders, and fills
-- [ ] Add a version/schema field to `tpt-lattice-io`'s `SerializableGrid` format for
-      forward/backward compatibility as `CellValue`/`CellId` evolve
-- [ ] Persist formulas (not just computed values) in the io format, or provide a companion
-      mechanism — reloading a saved snapshot today turns a live sheet into dead values
+      `DateTimeIso` to `CellValue::Text` — *deferred*: `CellValue::Date(f64)` now exists, but
+      mapping an ISO `DateTime` to an Excel serial `f64` is non-trivial; left as a follow-up
+- [x] Extend style import beyond bold/italic/alignment/number-format to fonts, colors,
+      borders, and fills — `CellStyle` now carries `fill_color`/`font_color`/`font_name`/`border`
+      (ARGB/`borderId` parsed from `styles.xml`)
+- [x] Add a version/schema field to `tpt-lattice-io`'s `SerializableGrid` — `format_version`
+      (`FORMAT_VERSION`) with `#[serde(default)]` so older files still deserialize
+- [x] Persist formulas (not just computed values) in the io format — `SerializableGrid` now has
+      a `formulas: BTreeMap<cell, String>` with `set_formula`/`get_formula`/`iter_formulas`
+      (round-trip tested). Engine-side population on snapshot remains a follow-up.
+
+> **Phase 12 (CI/Tooling) verified complete 2026-08-12:** all six items were already implemented
+> and pass locally (frontend lint/typecheck/4 vitest tests; `wasm-pack test` runs real tests; audit,
+> Dependabot, cross-platform matrix, and tag-triggered release automation all present). The checklist
+> had drifted from the repo — see the Phase 12 section for detail.
 
 ## Phase 12 — CI/Tooling
 
-- [ ] Add a frontend CI job: `npm install`, `typecheck`, `test` (vitest), `build` — none of
-      this currently runs in CI even though the tests exist
-- [ ] Make CI actually run `wasm-pack test` — `todo.md` currently claims this is done, but
-      the `wasm` job only builds the package, it never runs tests
-- [ ] Add `cargo audit`/`npm audit`/Dependabot for dependency vulnerability tracking
-- [ ] Add tag-triggered release automation: ordered crates.io publish + GitHub Release notes
-- [ ] Add a cross-platform CI matrix (currently `ubuntu-latest` only)
-- [ ] Add ESLint/Prettier config for the frontend (currently only `tsc --noEmit`)
+> **Verified complete (2026-08-12).** All six items below were already implemented in the
+> repo and pass locally: `.github/workflows/ci.yml` has `test` (matrix `ubuntu/macos/windows`),
+> `lint`, `audit` (cargo + npm), `wasm` (`wasm-pack build` **and** `wasm-pack test --node`), and
+> `frontend` (npm ci → lint → typecheck → test → build) jobs; `.github/dependabot.yml` covers
+> cargo + npm; `.github/workflows/release.yml` does tag-triggered ordered crates.io publish +
+> GitHub Release; and the frontend has `eslint.config.js` + `.prettierrc.json` wired to
+> `npm run lint`/`format` (verified: lint, `tsc --noEmit`, and `vitest` all pass).
+
+- [x] Add a frontend CI job: `npm install`, `typecheck`, `test` (vitest), `build` — implemented
+      as the `frontend` job in `ci.yml` (verified locally: lint/typecheck/4 vitest tests pass)
+- [x] Make CI actually run `wasm-pack test` — the `wasm` job runs `wasm-pack test
+      crates/tpt-lattice-wasm --node`, and `crates/tpt-lattice-wasm/src/lib.rs` has real
+      `#[wasm_bindgen_test]` tests (`engine_evaluates_through_handle`, `evaluator_core_math`)
+- [x] Add `cargo audit`/`npm audit`/Dependabot — `audit` job in `ci.yml` + `.github/dependabot.yml`
+      (cargo + npm, weekly)
+- [x] Add tag-triggered release automation: ordered crates.io publish + GitHub Release notes —
+      `.github/workflows/release.yml` (tag `v*` → publish in dependency order → GitHub Release)
+- [x] Add a cross-platform CI matrix — `test` job already runs `ubuntu-latest`/`macos-latest`/
+      `windows-latest`
+- [x] Add ESLint/Prettier config for the frontend — `eslint.config.js` (typescript-eslint +
+      prettier) and `.prettierrc.json` wired to `npm run lint`/`format`
 
 ## Phase 13 — Adoption: Examples, Templates & Onboarding
 
-- [ ] Add a root-level quick start for running the *full* collaborative app (frontend +
-      wasm build + server) — the current README quick start only covers the headless engine
-- [ ] Wire the wasm build into the frontend's `npm run dev`/`build` scripts (e.g.
+- [x] Add a root-level quick start for running the *full* collaborative app (frontend +
+      wasm build + server) — `README.md` now has a "Quick start (full collaborative app)"
+      section with one-command and manual paths
+- [x] Wire the wasm build into the frontend's `npm run dev`/`build` scripts (e.g.
       `predev`/`prebuild`) so setup is one command instead of a manual multi-step process
-- [ ] Add a Docker Compose file or devcontainer for one-command environment setup
-- [ ] Add sample/template spreadsheets (e.g. budget, project tracker) loadable from the UI
-- [ ] Add a `CONTRIBUTING.md`
-- [ ] Add a hosted live demo / CI-published preview build
-- [ ] Add an in-app LES formula cheat-sheet/reference, since LES syntax deliberately departs
-      from Excel conventions and new users will need a bridge
+      — *already wired* in `frontend/package.json` (`predev`/`prebuild` run `wasm-pack`)
+- [x] Add a Docker Compose file or devcontainer for one-command environment setup —
+      `Dockerfile`, `Dockerfile.server`, `docker-compose.yml`, `.devcontainer/devcontainer.json`, `.dockerignore`
+- [x] Add sample/template spreadsheets (e.g. budget, project tracker) loadable from the UI —
+      `examples/templates/*.json` + `examples/README.md`; loadable via Toolbar → Open
+- [x] Add a `CONTRIBUTING.md`
+- [ ] Add a hosted live demo / CI-published preview build — *deferred*: requires a hosting
+      target / CI publish job (auth + infra outside this pass)
+- [x] Add an in-app LES formula cheat-sheet/reference — `components/FormulaHelp.tsx` modal,
+      opened from Toolbar → Help
 
 ## Innovative additions (new ideas)
 

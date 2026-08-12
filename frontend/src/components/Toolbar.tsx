@@ -7,6 +7,8 @@ export interface ToolbarProps {
   onUndo: () => void;
   onRedo: () => void;
   onFind: () => void;
+  onHelp: () => void;
+  onOpen: (file: File) => void;
   onToggleBold: () => void;
   onToggleItalic: () => void;
   onNumFmt: (fmt: NonNullable<CellStyle["numFmt"]>) => void;
@@ -27,6 +29,7 @@ const btn = (active: boolean): Record<string, string> => ({
 export function Toolbar(props: ToolbarProps) {
   const [fmt, setFmt] = createSignal<NonNullable<CellStyle["numFmt"]>>("general");
   const style = () => props.activeStyle();
+  let fileInput!: HTMLInputElement;
 
   return (
     <div
@@ -81,6 +84,23 @@ export function Toolbar(props: ToolbarProps) {
       <button style={btn(false)} onClick={props.onFind} title="Find / Replace">
         Find
       </button>
+      <button style={btn(false)} onClick={props.onHelp} title="LES formula reference">
+        Help
+      </button>
+      <button style={btn(false)} onClick={() => fileInput.click()} title="Open a .json grid">
+        Open
+      </button>
+      <input
+        ref={fileInput}
+        type="file"
+        accept="application/json,.json"
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const f = e.currentTarget.files?.[0];
+          if (f) props.onOpen(f);
+          e.currentTarget.value = "";
+        }}
+      />
       <button style={btn(false)} onClick={props.onEvaluate}>
         Evaluate
       </button>

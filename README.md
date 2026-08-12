@@ -21,6 +21,7 @@ Unlike legacy spreadsheets burdened by implicit type coercion, TPT Lattice enfor
 | `tpt-lattice-crdt` | Operation-based CRDT for conflict-free grid mutations | ❌ |
 | `tpt-lattice-io` | MessagePack / compact JSON serialization | ❌ |
 | `tpt-lattice-import-xlsx` | Opt-in `.xlsx` → `CellValue` translation (calamine) | ❌ |
+| `tpt-lattice-export-xlsx` | Write grids back out to `.xlsx` (OOXML) | ❌ |
 | `tpt-lattice-wasm` | `wasm-bindgen` glue exposing the engine to JS | ❌ |
 | `tpt-lattice-server` | Minimal Axum WebSocket op-broadcast server | ❌ |
 
@@ -39,6 +40,50 @@ engine.set_formula(CellId::from_a1("B1"), "=A1 * 2").unwrap();
 engine.evaluate().unwrap();
 assert_eq!(engine.get_value(CellId::from_a1("B1")), CellValue::Number(42.0));
 ```
+
+## Quick start (full collaborative app)
+
+The browser UI (`frontend/`) talks to the engine compiled to WebAssembly inside a
+Web Worker, and can sync changes over a WebSocket server (`tpt-lattice-server`).
+
+### One-command (recommended)
+
+The frontend's `dev`/`build` scripts automatically build the wasm engine first:
+
+```sh
+# Terminal 1 — the collaborative sync server (optional; the UI works single-user without it)
+cargo run -p tpt-lattice-server
+
+# Terminal 2 — the UI (builds wasm, then serves on http://localhost:5173)
+cd frontend
+npm install
+npm run dev
+```
+
+Then open <http://localhost:5173>. Use **Toolbar → Open** to load a sample grid
+from [`examples/templates/`](./examples/templates), and **Help** for the LES
+formula reference.
+
+### Manual build
+
+```sh
+# 1. Build the wasm engine package
+cd crates/tpt-lattice-wasm
+wasm-pack build --target web --out-dir pkg
+
+# 2. (Optional) start the sync server
+cargo run -p tpt-lattice-server
+
+# 3. Build/serve the frontend
+cd frontend
+npm install
+npm run build      # -> dist/ (engine worker + wasm asset)
+# or: npm run dev   # -> http://localhost:5173
+```
+
+A `Dockerfile`, `docker-compose.yml`, and a VS Code `.devcontainer` are provided
+for a one-command, dependency-free environment — see
+[`docker-compose.yml`](./docker-compose.yml).
 
 ## Building & testing
 

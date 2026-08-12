@@ -2,8 +2,10 @@ import { createEffect, createSignal, onMount } from "solid-js";
 import { createStore } from "solid-js/store";
 import { EngineClient } from "./engine/engineClient";
 import { Grid } from "./grid/Grid";
+import { AccessibleGrid, VISUALLY_HIDDEN } from "./grid/AccessibleGrid";
 import { FormulaBar } from "./components/FormulaBar";
 import { Toolbar } from "./components/Toolbar";
+import { FormulaHelp } from "./components/FormulaHelp";
 import { SheetTabs } from "./components/SheetTabs";
 import { FindReplace } from "./components/FindReplace";
 import { ContextMenu } from "./components/ContextMenu";
@@ -56,8 +58,23 @@ export function App() {
   const [findMatches, setFindMatches] = createSignal<Set<string>>(new Set());
   const [findOpen, setFindOpen] = createSignal(false);
   const [contextMenu, setContextMenu] = createSignal<{ x: number; y: number; col: number; row: number } | null>(null);
+  const [showHelp, setShowHelp] = createSignal(false);
 
   let clipboardText = "";
+
+  // --- accessibility: live-region announcements -----------------------------
+  // Emit a polite announcement whenever the active cell or its value changes so
+  // screen-reader users get the same feedback as the visual highlight.
+  const [announcement, setAnnouncement] = createSignal("");
+  createEffect(() => {
+    const a = store.active;
+    const a1 = toA1(a.col, a.row);
+    const k = `${a.col},${a.row}`;
+    const f = formulas()[k];
+    const raw = f !== undefined ? f : valueText(store.cells[k] ?? "Empty");
+    const suffix = f !== undefined ? " formula" : "";
+    setAnnouncement(`${a1}${suffix}: ${raw === "" ? "(empty)" : raw}`);
+  });
 
   // Sync client (created once the engine worker is ready). Non-reactive on purpose.
   let sync: SyncClient | null = null;
@@ -318,6 +335,39 @@ export function App() {
     void sync?.publishLocal();
   };
 
+  // Load a grid from a `.json` file in the LES grid format:
+  // `{ "cells": { "A1": <value>, ... }, "formulas": { "B1": "=A1*2", ... } }`.
+  // Replaces the current sheet contents.
+  const openFile = async (file: File) => {
+    const text = await file.text();
+    let data: { cells?: Record<string, CellValue>; formulas?: Record<string, string> };
+    try {
+      data = JSON.parse(text);
+    } catch {
+      return;
+    }
+    await engine.reset();
+    setStore("cells", {});
+    setFormulas({});
+    for (const [a1, value] of Object.entries(data.cells ?? {})) {
+      if (parseA1(a1) && value) {
+        await engine.setCell(a1, value);
+        setStore("cells", a1, value);
+      }
+    }
+    const formulaMap: Record<string, string> = {};
+    for (const [a1, formula] of Object.entries(data.formulas ?? {})) {
+      if (parseA1(a1) && formula) {
+        await engine.setFormula(a1, formula);
+        formulaMap[a1] = formula;
+        setStore("cells", a1, "Empty");
+      }
+    }
+    setFormulas(formulaMap);
+    await evaluateAndRefresh();
+    void sync?.publishLocal();
+  };
+
   // --- formatting ----------------------------------------------------------
 
   const applyStyle = (patch: CellStyle) => {
@@ -496,6 +546,8 @@ export function App() {
         onUndo={() => void undo()}
         onRedo={() => void redo()}
         onFind={() => setFindOpen(true)}
+        onHelp={() => setShowHelp(true)}
+        onOpen={(f) => void openFile(f)}
         onToggleBold={() => applyStyle({ bold: !activeStyle().bold })}
         onToggleItalic={() => applyStyle({ italic: !activeStyle().italic })}
         onNumFmt={(fmt) => applyStyle({ numFmt: fmt })}
@@ -540,6 +592,10 @@ export function App() {
         remote={onRemoteChanged}
         find={findMatches}
       />
+      <AccessibleGrid store={store} formulas={formulas} />
+      <div role="status" aria-live="polite" style={VISUALLY_HIDDEN}>
+        {announcement()}
+      </div>
       <SheetTabs />
       <FindReplace
         open={findOpen()}
@@ -566,6 +622,7 @@ export function App() {
           onClose={() => setContextMenu(null)}
         />
       )}
+      {showHelp() && <FormulaHelp onClose={() => setShowHelp(false)} />}
     </div>
   );
 }

@@ -1,0 +1,12 @@
+# Build and run the TPT Lattice collaborative sync server (Axum WebSocket).
+# Usage:
+#   docker build -f Dockerfile.server -t tpt-lattice-server .
+#   docker run --rm -p 8080:8080 tpt-lattice-server
+
+FROM rust:1.84-slim
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY . .
+EXPOSE 8080
+ENTRYPOINT ["cargo", "run", "--release", "-p", "tpt-lattice-server"]

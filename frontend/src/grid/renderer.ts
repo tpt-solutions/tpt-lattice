@@ -132,15 +132,20 @@ export function drawGrid(s: RenderState) {
 
       // content
       const text = valueToText(v, style);
+      // Non-color error cue: a warning glyph so errors are not conveyed by
+      // the red background alone (accessibility: color-blind users).
+      if (errored) {
+        drawErrorIcon(ctx, x + 4, y + rowHeight(r, s.heights) / 2);
+      }
       if (text) {
         ctx.fillStyle = errored ? COLORS.errorText : COLORS.text;
         ctx.font = `${style?.italic ? "italic " : ""}${style?.bold ? "700" : "400"} 13px ui-monospace, SFMono-Regular, Menlo, monospace`;
         const align = style?.align ?? (typeof v === "object" && "Number" in v ? "right" : "left");
         ctx.textAlign = align;
-        const padX = 6;
+        const padX = 6 + (errored ? 14 : 0);
         const tx =
           align === "right"
-            ? x + colWidth(c, s.widths) - padX
+            ? x + colWidth(c, s.widths) - 6
             : align === "center"
               ? x + colWidth(c, s.widths) / 2
               : x + padX;
@@ -207,4 +212,23 @@ export function drawGrid(s: RenderState) {
     ctx.lineWidth = 2;
     ctx.strokeRect(ax + 1, ay + 1, colWidth(s.active.col, s.widths) - 2, rowHeight(s.active.row, s.heights) - 2);
   }
+}
+
+/** Draw a small warning triangle at (cx, cy) as a non-color error cue. */
+function drawErrorIcon(ctx: CanvasRenderingContext2D, cx: number, cy: number) {
+  const s = 9;
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - s / 2);
+  ctx.lineTo(cx + s / 2, cy + s / 2);
+  ctx.lineTo(cx - s / 2, cy + s / 2);
+  ctx.closePath();
+  ctx.fillStyle = "#b91c1c";
+  ctx.fill();
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "bold 8px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("!", cx, cy + 1);
+  ctx.restore();
 }

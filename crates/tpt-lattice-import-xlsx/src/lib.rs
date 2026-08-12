@@ -52,6 +52,11 @@ pub struct ImportedSheet {
     pub merged_cells: Vec<MergedRegion>,
     /// Per-cell styling carried over from the workbook, keyed by `CellId`.
     pub styles: BTreeMap<CellId, CellStyle>,
+    /// Source formulas translated from Excel syntax into LES, keyed by `CellId`.
+    /// Present only for cells whose formula LES can represent; unsupported
+    /// formulas instead surface as `CellValue::Error(UnsupportedFormula)` in
+    /// [`cells`].
+    pub formulas: BTreeMap<CellId, String>,
 }
 
 /// Import the **first** worksheet of an `.xlsx` workbook.
@@ -64,6 +69,20 @@ pub fn import_first_sheet(bytes: &[u8]) -> Result<ImportedSheet, ImportError> {
         .cloned()
         .ok_or_else(|| ImportError::SheetNotFound("(no sheets)".into()))?;
     import_sheet(bytes, &name)
+}
+
+/// Import **every** worksheet of a workbook, returning them in workbook order
+/// alongside their names. Useful for round-tripping multi-sheet books or importing
+/// a whole document at once.
+pub fn import_all_sheets(bytes: &[u8]) -> Result<Vec<(String, ImportedSheet)>, ImportError> {
+    let workbook =
+        Xlsx::new(Cursor::new(bytes.to_vec())).map_err(|e| ImportError::Calamine(e.to_string()))?;
+    let names = workbook.sheet_names().to_vec();
+    let mut out = Vec::with_capacity(names.len());
+    for name in names {
+        out.push((name.clone(), import_sheet(bytes, &name)?));
+    }
+    Ok(out)
 }
 
 /// Import a specific worksheet by name.
@@ -97,13 +116,25 @@ pub fn import_sheet(bytes: &[u8], sheet_name: &str) -> Result<ImportedSheet, Imp
             // Absolute (row, col) in the sheet for this data cell.
             let abs = (dsr as usize + i, dsc as usize + j);
             let id = CellId::from_rc(abs.1 as u64, abs.0 as u64);
-            let value = map_cell(cell);
+            let cached = map_cell(cell);
 
-            // If Excel stored a formula for this cell, LES cannot represent it
-            // faithfully yet, so surface it as an explicit error value.
+            // If Excel stored a formula for this cell, translate it into LES and
+            // carry it in `formulas`. Cells whose formula LES cannot represent are
+            // surfaced as an explicit `UnsupportedFormula` error instead.
             let value = match formulas_by_cell.get(&abs) {
-                Some(formula) => CellValue::Error(LatticeError::unsupported(format!("={formula}"))),
-                None => value,
+                Some(formula) => match translate_excel_to_les(formula) {
+                    Some(les) => {
+                        sheet.formulas.insert(id, les);
+                        // Keep any cached computed value; otherwise leave the cell
+                        // empty (the formula is recorded separately).
+                        if cached.is_empty() {
+                            continue;
+                        }
+                        cached
+                    }
+                    None => CellValue::Error(LatticeError::unsupported(format!("={formula}"))),
+                },
+                None => cached,
             };
 
             if !value.is_empty() {
@@ -148,6 +179,92 @@ fn parse_coord(s: &str) -> Result<CellId, LatticeError> {
     CellId::try_from_a1(&cleaned).map_err(|e| LatticeError::ref_error(e.to_string()))
 }
 
+/// Translate an Excel formula string into LES syntax. Returns `None` when the
+/// formula uses constructs LES does not support (structured references, table
+/// array constants, external links, etc.).
+///
+/// Supported rewrites today:
+/// * strip the leading `=`
+/// * Excel ranges `A1:B2` become `RANGE(A1,B2)` (LES's explicit range form)
+///
+/// The result is best-effort: LES and Excel share much of their expression syntax,
+/// so many formulas pass through unchanged, but callers should still validate the
+/// produced formula against the LES parser.
+pub fn translate_excel_to_les(excel: &str) -> Option<String> {
+    let body = excel.trim().strip_prefix('=').unwrap_or(excel).trim();
+    if body.is_empty() {
+        return None;
+    }
+    // Reject constructs LES cannot represent.
+    for bad in ['@', '[', '!', '{', '}'] {
+        if body.contains(bad) {
+            return None;
+        }
+    }
+    let rewritten = rewrite_ranges(body);
+    Some(format!("={rewritten}"))
+}
+
+/// Rewrite Excel `A1:B2` ranges into LES's `RANGE(A1,B2)` form.
+fn rewrite_ranges(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if let Some((end, a)) = read_cellref(&chars, i) {
+            let mut j = end;
+            while j < chars.len() && chars[j].is_whitespace() {
+                j += 1;
+            }
+            if j < chars.len() && chars[j] == ':' {
+                let mut k = j + 1;
+                while k < chars.len() && chars[k].is_whitespace() {
+                    k += 1;
+                }
+                if let Some((end2, b)) = read_cellref(&chars, k) {
+                    out.push_str(&format!("RANGE({a},{b})"));
+                    i = end2;
+                    continue;
+                }
+            }
+            out.push_str(&a);
+            i = end;
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Read a cell reference (`$`-prefixed or bare `A1`) starting at `i`. Returns the
+/// index just past it and the canonical (uppercased, `$`-stripped) A1 string.
+fn read_cellref(chars: &[char], i: usize) -> Option<(usize, String)> {
+    let mut j = i;
+    while j < chars.len() && chars[j] == '$' {
+        j += 1;
+    }
+    let start = j;
+    while j < chars.len() && chars[j].is_ascii_alphabetic() {
+        j += 1;
+    }
+    let after_letters = j;
+    // Skip an absolute-row `$` marker between the column letters and the row digits.
+    while j < chars.len() && chars[j] == '$' {
+        j += 1;
+    }
+    let after_dollar = j;
+    while j < chars.len() && chars[j].is_ascii_digit() {
+        j += 1;
+    }
+    if after_letters == start || after_dollar == j {
+        return None;
+    }
+    let letters: String = chars[start..after_letters].iter().collect::<String>().to_uppercase();
+    let digits: String = chars[after_dollar..j].iter().collect();
+    Some((j, format!("{letters}{digits}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,5 +274,30 @@ mod tests {
         // An empty byte slice should fail gracefully, not panic.
         let result = import_first_sheet(b"not a real xlsx");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn translates_simple_formulas_to_les() {
+        assert_eq!(translate_excel_to_les("=A1+A2"), Some("=A1+A2".to_string()));
+        assert_eq!(
+            translate_excel_to_les("=SUM(A1:B2)"),
+            Some("=SUM(RANGE(A1,B2))".to_string())
+        );
+        assert_eq!(
+            translate_excel_to_les("=A1 + B2 : C3"),
+            Some("=A1 + RANGE(B2,C3)".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_formulas() {
+        assert_eq!(translate_excel_to_les("=@A1"), None);
+        assert_eq!(translate_excel_to_les("=Sheet2!A1"), None);
+        assert_eq!(translate_excel_to_les("={1,2;3,4}"), None);
+        assert_eq!(translate_excel_to_les(""), None);
+        assert_eq!(
+            translate_excel_to_les("=SUM($A$1:$B$2)"),
+            Some("=SUM(RANGE(A1,B2))".to_string())
+        );
     }
 }
