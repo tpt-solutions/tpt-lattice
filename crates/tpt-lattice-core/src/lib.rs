@@ -26,7 +26,7 @@ mod error;
 mod grid;
 
 pub use cell_id::{CellId, ColumnParseError};
-pub use cell_value::CellValue;
+pub use cell_value::{format_serial_date, serial_from_ymd, CellValue};
 pub use error::LatticeError;
 pub use grid::GridState;
 

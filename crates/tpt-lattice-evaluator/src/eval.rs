@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use tpt_lattice_core::{format_serial_date, serial_from_ymd, CellId, CellValue, GridState, LatticeError};
+use tpt_lattice_core::{format_serial_date, CellId, CellValue, GridState, LatticeError};
 use tpt_lattice_parser::ast::{BinaryOp, CastKind, Expr, Literal, MatchPattern, UnaryOp};
 
 /// Evaluate a formula expression against `grid`, resolving `MATCH` bindings via
@@ -218,6 +218,8 @@ fn eval_cast(
             },
             CellValue::Boolean(b) => CellValue::Number(if b { 1.0 } else { 0.0 }),
             CellValue::Error(e) => CellValue::Error(e),
+            CellValue::Date(d) => CellValue::Number(d),
+            CellValue::List(_) => CellValue::Error(LatticeError::type_error("Number", "List")),
             CellValue::Empty => CellValue::Error(LatticeError::type_error("Number", "Empty")),
         },
         CastKind::Text => match v {
@@ -225,6 +227,10 @@ fn eval_cast(
             CellValue::Number(n) => CellValue::Text(n.to_string()),
             CellValue::Boolean(b) => CellValue::Text(b.to_string()),
             CellValue::Error(e) => CellValue::Text(format!("#{e}")),
+            CellValue::Date(d) => CellValue::Text(format_serial_date(d)),
+            CellValue::List(items) => {
+                CellValue::Text(items.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", "))
+            }
             CellValue::Empty => CellValue::Text(String::new()),
         },
         CastKind::Boolean => match v {
@@ -237,6 +243,8 @@ fn eval_cast(
                 _ => CellValue::Error(LatticeError::type_error("Boolean", "Text")),
             },
             CellValue::Error(e) => CellValue::Error(e),
+            CellValue::Date(_) => CellValue::Boolean(true),
+            CellValue::List(_) => CellValue::Error(LatticeError::type_error("Boolean", "List")),
             CellValue::Empty => CellValue::Error(LatticeError::type_error("Boolean", "Empty")),
         },
     }
@@ -557,6 +565,8 @@ fn concat(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellVal
             CellValue::Number(n) => out.push_str(&n.to_string()),
             CellValue::Boolean(b) => out.push_str(&b.to_string()),
             CellValue::Error(e) => return CellValue::Error(e),
+            CellValue::Date(d) => out.push_str(&format_serial_date(d)),
+            CellValue::List(_) => return CellValue::Error(LatticeError::type_error("Text", "List")),
             CellValue::Empty => {}
         }
     }
@@ -670,6 +680,10 @@ fn eval_text(
         CellValue::Number(n) => CellValue::Text(n.to_string()),
         CellValue::Boolean(b) => CellValue::Text(b.to_string()),
         CellValue::Empty => CellValue::Text(String::new()),
+        CellValue::Date(d) => CellValue::Text(format_serial_date(d)),
+        CellValue::List(items) => {
+            CellValue::Text(items.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", "))
+        }
         e @ CellValue::Error(_) => e,
     }
 }

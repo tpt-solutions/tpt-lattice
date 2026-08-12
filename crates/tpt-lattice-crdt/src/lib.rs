@@ -187,7 +187,11 @@ fn virtual_index(u: &Ulid, kind: u64) -> Option<u64> {
 /// ordering. The canonical row/column ordering is rebuilt deterministically from
 /// the full set of structural ops (sorted by causal precedence), so concurrent
 /// structural edits converge to the same ordering on every peer.
-#[derive(Debug, Clone, Default)]
+/// The conflict-free replicated grid state.
+///
+/// `Serialize`/`Deserialize` are derived so the full structural + cell state can
+/// be snapshotted (e.g. for undo/redo or persistence) and re-materialized.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CrdtStore {
     /// Materialized cell values keyed by `(column id, row id)`.
     cells: HashMap<(Ulid, Ulid), CellValue>,
@@ -260,6 +264,20 @@ impl CrdtStore {
         let id = Ulid::new();
         let clock = self.clock.tick(self.actor);
         let op = Op::InsertRow {
+            id,
+            after,
+            clock,
+            actor: self.actor,
+        };
+        self.apply(op.clone());
+        (id, op)
+    }
+
+    /// Author an `InsertColumn` op with a fresh ULID and apply it locally.
+    pub fn insert_column(&mut self, after: Option<Ulid>) -> (Ulid, Op) {
+        let id = Ulid::new();
+        let clock = self.clock.tick(self.actor);
+        let op = Op::InsertColumn {
             id,
             after,
             clock,
@@ -435,6 +453,57 @@ impl CrdtStore {
     /// Number of materialized columns.
     pub fn column_count(&self) -> usize {
         self.columns.len()
+    }
+
+    /// The immutable row id currently displayed at integer `index`. Exposed so the
+    /// wasm/UI layer can translate a visible coordinate into a structural op.
+    pub fn row_ulid_at(&self, index: u64) -> Ulid {
+        self.row_ulid(index)
+    }
+
+    /// The immutable column id currently displayed at integer `index`.
+    pub fn col_ulid_at(&self, index: u64) -> Ulid {
+        self.col_ulid(index)
+    }
+
+    /// Author an `InsertRow` op after the row at `after_index` (or at the top when
+    /// `None`) and apply it locally. Returns the resulting op.
+    pub fn insert_row_at(&mut self, after_index: Option<u64>) -> Op {
+        let after = after_index.map(|i| self.row_ulid_at(i));
+        self.insert_row(after).1
+    }
+
+    /// Author an `InsertColumn` op after the column at `after_index` (or at the
+    /// left edge when `None`) and apply it locally. Returns the resulting op.
+    pub fn insert_column_at(&mut self, after_index: Option<u64>) -> Op {
+        let after = after_index.map(|i| self.col_ulid_at(i));
+        self.insert_column(after).1
+    }
+
+    /// Author a `DeleteRow` op for the row currently at `index` and apply locally.
+    pub fn delete_row_at(&mut self, index: u64) -> Op {
+        let id = self.row_ulid_at(index);
+        let clock = self.clock.tick(self.actor);
+        let op = Op::DeleteRow {
+            id,
+            clock,
+            actor: self.actor,
+        };
+        self.apply(op.clone());
+        op
+    }
+
+    /// Author a `DeleteColumn` op for the column currently at `index` and apply locally.
+    pub fn delete_column_at(&mut self, index: u64) -> Op {
+        let id = self.col_ulid_at(index);
+        let clock = self.clock.tick(self.actor);
+        let op = Op::DeleteColumn {
+            id,
+            clock,
+            actor: self.actor,
+        };
+        self.apply(op.clone());
+        op
     }
 
     /// Enumerate every materialized `(CellId, CellValue)` pair, mapping each

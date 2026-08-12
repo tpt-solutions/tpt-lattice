@@ -79,6 +79,37 @@ export class EngineClient {
     return r.type === "Outbox" ? r.ops : [];
   }
 
+  /** Low-level passthrough for any `Request` (used by newer engine features). */
+  request(req: Request): Promise<Response> {
+    return this.send(req);
+  }
+
+  /** Return every materialized `(A1, value)` pair (for find/replace). */
+  async listCells(): Promise<{ cell: string; value: CellValue }[]> {
+    const r = await this.send({ type: "ListCells" });
+    return r.type === "Cells" ? r.cells : [];
+  }
+
+  /** Insert a row after `index` (or at the top when `index` is null). */
+  insertRow(index: number | null) {
+    return this.send({ type: "InsertRow", index });
+  }
+
+  /** Delete the row currently at `index`. */
+  deleteRow(index: number) {
+    return this.send({ type: "DeleteRow", index });
+  }
+
+  /** Insert a column after `index` (or at the left edge when null). */
+  insertColumn(index: number | null) {
+    return this.send({ type: "InsertColumn", index });
+  }
+
+  /** Delete the column currently at `index`. */
+  deleteColumn(index: number) {
+    return this.send({ type: "DeleteColumn", index });
+  }
+
   evaluate() {
     return this.send({ type: "Evaluate" });
   }

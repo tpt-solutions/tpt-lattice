@@ -15,11 +15,13 @@ class Hub {
   connect(ws: FakeWebSocket) {
     this.clients.add(ws);
     queueMicrotask(() => {
+      ws.readyState = FakeWebSocket.OPEN;
       if (ws.onopen) ws.onopen();
+      // Replay server history only after the client has installed its handlers.
+      for (const h of this.history) {
+        if (ws.onmessage) ws.onmessage({ data: h });
+      }
     });
-    for (const h of this.history) {
-      if (ws.onmessage) ws.onmessage({ data: h });
-    }
   }
   broadcast(_from: FakeWebSocket, data: string) {
     for (const c of this.clients) {
@@ -72,7 +74,7 @@ class FakeEngine {
     this.outbox = [];
     return o;
   }
-  applyOps(ops: Op[]) {
+  async applyOps(ops: Op[]) {
     for (const op of ops) this.applied.push(op);
   }
   // Simulate a local edit (what the UI would trigger through the real engine).

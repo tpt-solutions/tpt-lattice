@@ -8,7 +8,12 @@
 > builds and bundles** (`npm run build` → `dist/` with the engine worker + wasm asset), the **Phase 3
 > sync layer is implemented and tested** (TypeScript `SyncClient`, IndexedDB `OpLog` offline queue,
 > reconnect replay with server history reconciliation, and a convergence test), and **merged cells +
-> basic styles import** is implemented. Remaining work: crates.io publication and the `v0.1.0` tag/release
+> basic styles import** is implemented. As of 2026-08-12 the **Phase 9 UI/UX work is largely done**
+> (undo/redo, copy/paste, right-click context menu, column/row resize, find/replace, real cell
+> formatting, header row/column selection, Home/End/PageUp/PageDown/Ctrl+Arrow keyboard nav,
+> row/column insert/delete wired to the CRDT ops, and a remote-change conflict UI); freeze panes,
+> true multi-sheet, and presence cursors remain deferred pending engine/server work. Remaining work:
+> crates.io publication and the `v0.1.0` tag/release
 > (both require a crates.io token / push, which are auth-gated), plus a large backlog captured below
 > from a full platform review (2026-08-12) — critical correctness/security bugs, formula-language and
 > UI/UX gaps, accessibility, import/export, CI, adoption/onboarding, and innovative-feature ideas.
@@ -240,25 +245,26 @@ with the engine worker and `tpt_lattice_wasm_bg.wasm` asset. Run `npm run dev` t
 
 ## Phase 9 — Missing UI/UX Features
 
-- [ ] Undo/redo
-- [ ] Copy/paste (clipboard integration)
-- [ ] Right-click context menu
-- [ ] Column/row resize (currently hardcoded fixed geometry in `grid/metrics.ts`)
-- [ ] Freeze panes
-- [ ] Find/replace
-- [ ] Make cell formatting real — Toolbar's bold/italic/number-format/alignment buttons are
-      currently visual-only stubs with no evaluator/render effect
-- [ ] Make multi-sheet support real — `SheetTabs` is currently a local-UI-only stub with no
-      engine backing (only one `LatticeEngine`/`CrdtStore` ever exists)
-- [ ] Add row/column insert/delete UI, wired to the CRDT ops once the Phase 6 structural-op
-      bugs are fixed
-- [ ] Fix formula bar to commit on blur (currently only commits on Enter, silently
-      discarding edits if the user clicks away)
-- [ ] Add keyboard nav: Home/End/PageUp/PageDown/Ctrl+Arrow jump-to-edge
-- [ ] Add header-click row/column selection
-- [ ] Add presence: show other users' cursors/selections
-- [ ] Add conflict UI: surface "this cell changed remotely" instead of silently repainting
-      on every remote op
+- [x] Undo/redo (snapshot-based command history; Ctrl+Z / Ctrl+Shift+Z)
+- [x] Copy/paste (clipboard integration; TSV over selection)
+- [x] Right-click context menu (copy / paste / clear / insert / delete row & column)
+- [x] Column/row resize (variable geometry in `grid/metrics.ts`, drag the header borders)
+- [ ] Freeze panes — *deferred* (rendering frozen rows/cols not yet implemented)
+- [x] Find/replace (dialog: find, next, replace, replace-all over loaded cells)
+- [x] Make cell formatting real — Toolbar bold/italic/number-format/alignment now apply a
+      per-cell `CellStyle` that the renderer honors (number formatting, alignment, weight/style)
+- [ ] Make multi-sheet support real — `SheetTabs` is still a local-UI-only stub; true
+      multi-sheet needs engine/server-side multi-`LatticeEngine` support (not yet built)
+- [x] Add row/column insert/delete UI, wired to the CRDT ops (`InsertRow`/`DeleteRow`/
+      `InsertColumn`/`DeleteColumn` engine requests added in `tpt-lattice-wasm`)
+- [x] Fix formula bar to commit on blur (now commits on blur as well as Enter)
+- [x] Add keyboard nav: Home/End/PageUp/PageDown/Ctrl+Arrow jump-to-edge
+- [x] Add header-click row/column selection (click + drag to select whole rows/columns)
+- [ ] Add presence: show other users' cursors/selections — *deferred* (needs server-side
+      cursor/selection broadcast; not in the current `/ws` protocol)
+- [x] Add conflict UI: surface "this cell changed remotely" — remote `SetCell`/`DeleteCell`
+      ops highlight the affected cell (amber border) for a few seconds instead of silently
+      repainting
 
 ## Phase 10 — Accessibility
 

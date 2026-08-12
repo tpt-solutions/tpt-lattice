@@ -1,7 +1,10 @@
 //! The strictly-typed value that may be stored in a cell.
 
+use alloc::format;
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec::Vec;
+use libm::{floor, fabs, round};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -179,14 +182,14 @@ pub fn format_serial_date(serial: f64) -> String {
     if !serial.is_finite() {
         return "#NUM!".to_string();
     }
-    let days = serial.floor() as i64;
-    let unix_days = days - EXCEL_EPOCH_OFFSET;
-    let (y, m, d) = civil_from_days(unix_days);
-    let frac = serial - serial.floor();
-    if frac.abs() < 1e-9 {
+        let days = floor(serial) as i64;
+        let unix_days = days - EXCEL_EPOCH_OFFSET;
+        let (y, m, d) = civil_from_days(unix_days);
+        let frac = serial - floor(serial);
+        if fabs(frac) < 1e-9 {
         return format!("{y:04}-{m:02}-{d:02}");
     }
-    let secs = (frac * 86_400.0).round() as i64;
+        let secs = round(frac * 86_400.0) as i64;
     let hh = (secs / 3600) % 24;
     let mm = (secs / 60) % 60;
     let ss = secs % 60;

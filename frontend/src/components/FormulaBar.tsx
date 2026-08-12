@@ -54,6 +54,7 @@ export function FormulaBar(props: FormulaBarProps) {
         }}
         onBlur={() => {
           focused = false;
+          props.onCommit(text());
         }}
         onInput={(e) => setText(e.currentTarget.value)}
         onKeyDown={(e) => {

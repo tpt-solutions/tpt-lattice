@@ -70,8 +70,12 @@ export class SyncClient {
   private async replay() {
     const ops = await this.log.all();
     for (const op of ops) this.rawSend(op);
-    for (const op of this.pending) this.rawSend(op);
+    // Snapshot pending before draining: `rawSend` may re-queue an op (e.g. if the
+    // socket is not yet OPEN), and iterating the live array while it mutates would
+    // otherwise loop forever.
+    const pending = this.pending;
     this.pending = [];
+    for (const op of pending) this.rawSend(op);
   }
 
   private rawSend(op: Op) {

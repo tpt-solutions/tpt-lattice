@@ -23,6 +23,16 @@ export type CellValue =
   | { Boolean: boolean }
   | { Error: LatticeError };
 
+// Per-cell visual formatting. Client-side only (not yet part of the CRDT/sync
+// model); it drives how a cell is rendered. All fields are optional and inherit
+// the default when absent.
+export type CellStyle = {
+  bold?: boolean;
+  italic?: boolean;
+  align?: "left" | "center" | "right";
+  numFmt?: "general" | "number" | "percent" | "currency";
+};
+
 // A vector clock is a map of actor id -> sequence number.
 export type VectorClock = Record<number, number>;
 
@@ -47,7 +57,12 @@ export type Request =
   | { type: "Reset" }
   | { type: "Init"; actor: number }
   | { type: "DeleteCell"; cell: string }
-  | { type: "TakeOutbox" };
+  | { type: "TakeOutbox" }
+  | { type: "ListCells" }
+  | { type: "InsertRow"; index: number | null }
+  | { type: "DeleteRow"; index: number }
+  | { type: "InsertColumn"; index: number | null }
+  | { type: "DeleteColumn"; index: number };
 
 // Responses returned by the engine worker, matching the Rust `Response` enum.
 export type Response =
@@ -56,6 +71,7 @@ export type Response =
   | { type: "Evaluated" }
   | { type: "OpsAccepted"; count: number }
   | { type: "Outbox"; ops: Op[] }
+  | { type: "Cells"; cells: { cell: string; value: CellValue }[] }
   | { type: "Error"; message: string };
 
 // ---- value helpers ---------------------------------------------------------

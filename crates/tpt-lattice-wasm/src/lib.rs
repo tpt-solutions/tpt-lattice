@@ -44,6 +44,16 @@ pub enum Request {
     DeleteCell { cell: String },
     /// Drain and return the ops this replica has authored since the last call.
     TakeOutbox,
+    /// Return every materialized `(A1, value)` pair (for find/replace, copy).
+    ListCells,
+    /// Insert a row after `index` (or at the top when `index` is null).
+    InsertRow { index: Option<u64> },
+    /// Delete the row currently at `index`.
+    DeleteRow { index: u64 },
+    /// Insert a column after `index` (or at the left edge when null).
+    InsertColumn { index: Option<u64> },
+    /// Delete the column currently at `index`.
+    DeleteColumn { index: u64 },
 }
 
 /// A response from the engine worker back to the main thread.
@@ -56,7 +66,16 @@ pub enum Response {
     OpsAccepted { count: usize },
     /// Locally-authored ops drained from the outbox.
     Outbox { ops: Vec<Op> },
+    /// A materialized cell: its A1 address and current value.
+    Cells { cells: Vec<CellListing> },
     Error { message: String },
+}
+
+/// A single materialized `(A1, value)` pair returned by [`Request::ListCells`].
+#[derive(serde::Serialize)]
+pub struct CellListing {
+    pub cell: String,
+    pub value: CellValue,
 }
 
 struct State {
@@ -197,6 +216,54 @@ impl LatticeEngine {
             Request::TakeOutbox => {
                 let ops = std::mem::take(&mut state.outbox);
                 Response::Outbox { ops }
+            }
+            Request::ListCells => {
+                let cells = crdt_cells(&state.crdt)
+                    .into_iter()
+                    .map(|(id, value)| CellListing {
+                        cell: id.to_a1(),
+                        value,
+                    })
+                    .collect();
+                Response::Cells { cells }
+            }
+            Request::InsertRow { index } => {
+                let op = state.crdt.insert_row_at(index);
+                state.outbox.push(op);
+                // Structural edits shift cell content, so re-materialize the
+                // evaluator from the rebuilt CRDT layout.
+                state.engine = Evaluator::new();
+                for (cid, value) in crdt_cells(&state.crdt) {
+                    state.engine.set_value(cid, value);
+                }
+                Response::Ok
+            }
+            Request::DeleteRow { index } => {
+                let op = state.crdt.delete_row_at(index);
+                state.outbox.push(op);
+                state.engine = Evaluator::new();
+                for (cid, value) in crdt_cells(&state.crdt) {
+                    state.engine.set_value(cid, value);
+                }
+                Response::Ok
+            }
+            Request::InsertColumn { index } => {
+                let op = state.crdt.insert_column_at(index);
+                state.outbox.push(op);
+                state.engine = Evaluator::new();
+                for (cid, value) in crdt_cells(&state.crdt) {
+                    state.engine.set_value(cid, value);
+                }
+                Response::Ok
+            }
+            Request::DeleteColumn { index } => {
+                let op = state.crdt.delete_column_at(index);
+                state.outbox.push(op);
+                state.engine = Evaluator::new();
+                for (cid, value) in crdt_cells(&state.crdt) {
+                    state.engine.set_value(cid, value);
+                }
+                Response::Ok
             }
         };
         serde_json::to_string(&resp).unwrap_or_else(|e| error_response(&e.to_string()))
