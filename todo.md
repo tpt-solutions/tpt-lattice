@@ -370,11 +370,11 @@ with the engine worker and `tpt_lattice_wasm_bg.wasm` asset. Run `npm run dev` t
        edit history, restore a prior state) — `wasm` engine auto-checkpoints the active sheet on
        every mutation (`Checkpoint`/`ListHistory`/`Restore` requests); `HistoryModal` lets users
        browse and restore checkpoints.
-- [ ] Git-style diff/merge view between two sheet versions
-- [ ] "What-if" branching: fork a sheet, experiment, merge back
+ - [x] Git-style diff/merge view between two sheet versions
+ - [x] "What-if" branching: fork a sheet, experiment, merge back
 - [ ] AI-assisted formula authoring: natural-language-to-LES translation, hover
       explain/lint on formulas
-- [ ] Sandboxed user-defined functions via a wasm plugin model for power users
+ - [x] Sandboxed user-defined functions via a wasm plugin model for power users
 - [ ] In-app formula unit tests: let users assert expected values for cells/ranges as a
       "check sheet" action
 - [x] Dependency-graph visualizer — new "Graph" toolbar button opens a modal rendering the

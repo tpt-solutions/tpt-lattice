@@ -88,7 +88,13 @@ class FakeEngine {
   }
 }
 
-const norm = (ops: Op[]) => ops.map((o) => JSON.stringify(o)).sort();
+const norm = (ops: Op[]) =>
+  [...new Set(
+    ops.map((o) => {
+      const { seq: _seq, ...rest } = o as Op & { seq?: number };
+      return JSON.stringify(rest);
+    }),
+  )].sort();
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 

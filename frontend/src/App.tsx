@@ -535,6 +535,15 @@ export function App() {
     if (activeSheet() === from) setActiveSheet(trimmed);
   };
 
+  /// Re-sync the sheet tab list from the engine (e.g. after a fork adds a sheet).
+  const refreshSheets = async () => {
+    const { sheets } = await engine.listSheets();
+    setSheetNames(sheets);
+    if (!sheets.includes(activeSheet())) {
+      await switchSheet(sheets[0]);
+    }
+  };
+
   // --- dependency-graph visualizer -----------------------------------------
 
   const insertRowAt = async (row: number) => {
