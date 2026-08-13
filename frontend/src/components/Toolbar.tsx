@@ -15,6 +15,22 @@ export interface ToolbarProps {
   onAlign: (align: NonNullable<CellStyle["align"]>) => void;
   /** The style applied to the active cell, for reflecting toggle state. */
   activeStyle: Accessor<CellStyle>;
+  /** Freeze leading rows/columns at the active cell. */
+  onFreeze: () => void;
+  /** Clear any active freeze panes. */
+  onUnfreeze: () => void;
+  /** Whether freeze panes are currently active. */
+  frozen: boolean;
+  /** Open the dependency-graph visualizer. */
+  onGraph: () => void;
+  /** Open the version-history browser. */
+  onHistory: () => void;
+  /** Open the Git-style diff/version view. */
+  onDiff: () => void;
+  /** Open the what-if branching (fork/merge) dialog. */
+  onBranch: () => void;
+  /** Open the sandboxed UDF plugin loader. */
+  onPlugins: () => void;
 }
 
 const btn = (active: boolean): Record<string, string> => ({
@@ -81,6 +97,27 @@ export function Toolbar(props: ToolbarProps) {
         ⇥
       </button>
       <div style={{ flex: "1 1 auto" }} />
+      <button style={btn(props.frozen)} onClick={props.onFreeze} title="Freeze rows/columns above and left of the active cell">
+        Freeze
+      </button>
+      <button style={btn(false)} onClick={props.onUnfreeze} title="Unfreeze panes" disabled={!props.frozen}>
+        Unfreeze
+      </button>
+      <button style={btn(false)} onClick={props.onGraph} title="Show the dependency graph">
+        Graph
+      </button>
+      <button style={btn(false)} onClick={props.onHistory} title="Browse version history">
+        History
+      </button>
+      <button style={btn(false)} onClick={props.onDiff} title="Git-style diff between saved versions">
+        Diff
+      </button>
+      <button style={btn(false)} onClick={props.onBranch} title="Fork a sheet and merge back">
+        Branch
+      </button>
+      <button style={btn(false)} onClick={props.onPlugins} title="Load sandboxed user-defined functions">
+        Plugins
+      </button>
       <button style={btn(false)} onClick={props.onFind} title="Find / Replace">
         Find
       </button>

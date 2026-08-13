@@ -7,14 +7,20 @@ import { FormulaBar } from "./components/FormulaBar";
 import { Toolbar } from "./components/Toolbar";
 import { FormulaHelp } from "./components/FormulaHelp";
 import { SheetTabs } from "./components/SheetTabs";
+import { DependencyGraph } from "./components/DependencyGraph";
 import { FindReplace } from "./components/FindReplace";
+import { HistoryModal } from "./components/HistoryModal";
+import { DiffModal } from "./components/DiffModal";
+import { BranchModal } from "./components/BranchModal";
+import { UdfModal } from "./components/UdfModal";
 import { ContextMenu } from "./components/ContextMenu";
 import { SyncClient } from "./sync/SyncClient";
 import type { GridStore } from "./store";
 import type { CellStyle, CellValue, Op } from "./types";
 import { valueText } from "./types";
-import { visibleRange, type Range } from "./grid/metrics";
+import { visibleRange, HEADER_W, HEADER_H, colX, rowY, colWidth, rowHeight, type Range } from "./grid/metrics";
 import { toA1, parseA1, cellBitsToRC } from "./grid/coords";
+import { adjustFormula } from "./grid/fill";
 
 const BUFFER = 3;
 const BIG = 1_000_000;
@@ -59,8 +65,57 @@ export function App() {
   const [findOpen, setFindOpen] = createSignal(false);
   const [contextMenu, setContextMenu] = createSignal<{ x: number; y: number; col: number; row: number } | null>(null);
   const [showHelp, setShowHelp] = createSignal(false);
+  const [freezeCols, setFreezeCols] = createSignal(0);
+  const [freezeRows, setFreezeRows] = createSignal(0);
+  const [sheetNames, setSheetNames] = createSignal<string[]>(["Sheet1"]);
+  const [activeSheet, setActiveSheet] = createSignal("Sheet1");
+  const [showGraph, setShowGraph] = createSignal(false);
+  const [showHistory, setShowHistory] = createSignal(false);
+  const [showDiff, setShowDiff] = createSignal(false);
+  const [showBranch, setShowBranch] = createSignal(false);
+  const [showPlugins, setShowPlugins] = createSignal(false);
+  // Client-only per-sheet state (the engine owns values + formulas content).
+  type SheetCache = {
+    widths: number[];
+    heights: number[];
+    styles: Record<string, CellStyle>;
+    formulas: Record<string, string>;
+  };
+  const sheetCache = new Map<string, SheetCache>();
 
   let clipboardText = "";
+  // Structured clipboard (positions + raw content) so a paste can preserve the
+  // source cell of each formula and adjust its relative references (fill-style).
+  type ClipCell = { col: number; row: number; value: string };
+  let clipboard: ClipCell[] = [];
+  let clipboardAnchor = { col: 0, row: 0 };
+
+  // Remote presence cursors: actor id -> { cell, color }.
+  const CURSOR_COLORS = [
+    "#ef4444",
+    "#f59e0b",
+    "#10b981",
+    "#3b82f6",
+    "#8b5cf6",
+    "#ec4899",
+    "#14b8a6",
+    "#f97316",
+  ];
+  const colorFor = (actor: number) =>
+    CURSOR_COLORS[((actor % CURSOR_COLORS.length) + CURSOR_COLORS.length) % CURSOR_COLORS.length];
+  const [remoteCursors, setRemoteCursors] = createSignal<Map<number, { cell: string; color: string }>>(
+    new Map(),
+  );
+  let lastCursorCell = "";
+  let cursorThrottle: number | undefined;
+  const broadcastCursor = (cell: string) => {
+    lastCursorCell = cell;
+    if (cursorThrottle) return;
+    cursorThrottle = window.setTimeout(() => {
+      cursorThrottle = undefined;
+      sync?.sendCursor(lastCursorCell);
+    }, 60);
+  };
 
   // --- accessibility: live-region announcements -----------------------------
   // Emit a polite announcement whenever the active cell or its value changes so
@@ -109,14 +164,27 @@ export function App() {
   };
 
   const ensureVisible = (col: number, row: number) => {
-    const x = 52 + col * 96;
-    const y = 26 + row * 26;
+    const frozenCol = col < freezeCols();
+    const frozenRow = row < freezeRows();
+    const x = colX(col, colWidths());
+    const y = rowY(row, rowHeights());
+    const w = colWidth(col, colWidths());
+    const h = rowHeight(row, rowHeights());
+    // The scrollable viewport starts after the frozen strip (+ header gutters).
+    const visLeft = HEADER_W + (freezeCols() > 0 ? colX(freezeCols(), colWidths()) - HEADER_W : 0);
+    const visTop = HEADER_H + (freezeRows() > 0 ? rowY(freezeRows(), rowHeights()) - HEADER_H : 0);
     let sx = scrollX();
     let sy = scrollY();
-    if (x < sx + 52) sx = Math.max(0, x - 52);
-    if (x + 96 > sx + viewW()) sx = x + 96 - viewW();
-    if (y < sy + 26) sy = Math.max(0, y - 26);
-    if (y + 26 > sy + viewH()) sy = y + 26 - viewH();
+    if (!frozenCol) {
+      const cx = x - sx;
+      if (cx < visLeft) sx = Math.max(0, x - visLeft);
+      if (cx + w > sx + viewW()) sx = x + w - viewW();
+    }
+    if (!frozenRow) {
+      const cy = y - sy;
+      if (cy < visTop) sy = Math.max(0, y - visTop);
+      if (cy + h > sy + viewH()) sy = y + h - viewH();
+    }
     setScrollX(Math.max(0, sx));
     setScrollY(Math.max(0, sy));
   };
@@ -126,6 +194,7 @@ export function App() {
     setStore("active", { col, row });
     setStore("selection", { col0: col, row0: row, col1: col, row1: row });
     ensureVisible(col, row);
+    broadcastCursor(toA1(col, row));
   };
 
   const setSelection = (range: Range) => {
@@ -145,6 +214,9 @@ export function App() {
 
   const refreshVisible = async () => {
     const range = visibleRange(scrollX(), scrollY(), viewW(), viewH(), BUFFER, colWidths(), rowHeights());
+    // Frozen leading rows/columns are always on screen, so always load them.
+    if (freezeCols() > 0) range.col0 = 0;
+    if (freezeRows() > 0) range.row0 = 0;
     const reads: Promise<void>[] = [];
     for (let r = range.row0; r <= range.row1; r++) {
       for (let c = range.col0; c <= range.col1; c++) {
@@ -285,17 +357,22 @@ export function App() {
   const copySelection = () => {
     const sel = clampSel(store.selection);
     const rows: string[] = [];
+    const cells: ClipCell[] = [];
     for (let r = sel.row0; r <= sel.row1; r++) {
       const out: string[] = [];
       for (let c = sel.col0; c <= sel.col1; c++) {
         const k = key(c, r);
         const f = formulas()[k];
-        out.push(f !== undefined ? f : valueText(store.cells[k] ?? "Empty"));
+        const v = f !== undefined ? f : valueText(store.cells[k] ?? "Empty");
+        out.push(v);
+        cells.push({ col: c, row: r, value: v });
       }
       rows.push(out.join("\t"));
     }
     const tsv = rows.join("\n");
     clipboardText = tsv;
+    clipboard = cells;
+    clipboardAnchor = { col: sel.col0, row: sel.row0 };
     void navigator.clipboard?.writeText(tsv).catch(() => {});
   };
 
@@ -311,6 +388,7 @@ export function App() {
     const rows = text.split("\n").map((r) => r.split("\t"));
     const baseCol = store.active.col;
     const baseRow = store.active.row;
+    const internal = clipboard.length > 0;
     const entries: { a1: string; st: CellState }[] = [];
     rows.forEach((rrow, ri) =>
       rrow.forEach((val, ci) => {
@@ -318,7 +396,18 @@ export function App() {
         const c = baseCol + ci;
         const r = baseRow + ri;
         const a1 = toA1(c, r);
-        const st: CellState = val.startsWith("=") ? { formula: val } : { value: parseInput(val) };
+        let st: CellState;
+        if (val.startsWith("=")) {
+          let f = val;
+          if (internal) {
+            const srcCol = clipboardAnchor.col + ci;
+            const srcRow = clipboardAnchor.row + ri;
+            f = adjustFormula(val, c - srcCol, r - srcRow);
+          }
+          st = { formula: f };
+        } else {
+          st = { value: parseInput(val) };
+        }
         entries.push({ a1, st });
       }),
     );
@@ -381,7 +470,72 @@ export function App() {
     bumpRev();
   };
 
-  // --- structural ops (wired to CRDT ops) ----------------------------------
+  // --- freeze panes --------------------------------------------------------
+  // Freeze the leading rows/columns up to (and excluding) the active cell.
+  const freezeAtActive = () => {
+    setFreezeCols(store.active.col);
+    setFreezeRows(store.active.row);
+  };
+  const unfreeze = () => {
+    setFreezeCols(0);
+    setFreezeRows(0);
+  };
+
+  // --- multi-sheet ----------------------------------------------------------
+  // The engine holds a separate evaluator/CRDT per sheet; the frontend caches
+  // the client-only view state (geometry, styles, raw formulas) per sheet and
+  // swaps it in when the active sheet changes.
+  const switchSheet = async (name: string) => {
+    if (name === activeSheet() || !sheetNames().includes(name)) return;
+    // Save the outgoing sheet's client-only state.
+    sheetCache.set(activeSheet(), {
+      widths: colWidths(),
+      heights: rowHeights(),
+      styles: { ...store.styles },
+      formulas: { ...formulas() },
+    });
+    setActiveSheet(name);
+    await engine.selectSheet(name);
+    const c = sheetCache.get(name) ?? { widths: [], heights: [], styles: {}, formulas: {} };
+    setColWidths(c.widths);
+    setRowHeights(c.heights);
+    setStore("styles", c.styles);
+    setFormulas(c.formulas);
+    setStore("cells", {});
+    bumpRev();
+    await evaluateAndRefresh();
+  };
+
+  const addSheet = async () => {
+    const name = `Sheet${sheetNames().length + 1}`;
+    await engine.newSheet(name);
+    setSheetNames([...sheetNames(), name]);
+    await switchSheet(name);
+  };
+
+  const deleteSheet = async (name: string) => {
+    if (sheetNames().length <= 1) return;
+    await engine.deleteSheet(name);
+    const remaining = sheetNames().filter((n) => n !== name);
+    setSheetNames(remaining);
+    sheetCache.delete(name);
+    if (activeSheet() === name) await switchSheet(remaining[0]);
+  };
+
+  const renameSheet = async (from: string, to: string) => {
+    const trimmed = to.trim();
+    if (!trimmed || sheetNames().includes(trimmed)) return;
+    await engine.renameSheet(from, trimmed);
+    setSheetNames(sheetNames().map((n) => (n === from ? trimmed : n)));
+    if (sheetCache.has(from)) {
+      const v = sheetCache.get(from)!;
+      sheetCache.delete(from);
+      sheetCache.set(trimmed, v);
+    }
+    if (activeSheet() === from) setActiveSheet(trimmed);
+  };
+
+  // --- dependency-graph visualizer -----------------------------------------
 
   const insertRowAt = async (row: number) => {
     const idx = row <= 0 ? null : row - 1;
@@ -526,6 +680,13 @@ export function App() {
         }
         scheduleRefresh();
       },
+      onRemoteCursor: (actor, cell) => {
+        setRemoteCursors((prev) => {
+          const n = new Map(prev);
+          n.set(actor, { cell, color: colorFor(actor) });
+          return n;
+        });
+      },
     });
     await evaluateAndRefresh();
   });
@@ -553,6 +714,14 @@ export function App() {
         onNumFmt={(fmt) => applyStyle({ numFmt: fmt })}
         onAlign={(align) => applyStyle({ align })}
         activeStyle={activeStyle}
+        onFreeze={freezeAtActive}
+        onUnfreeze={unfreeze}
+        frozen={freezeCols() > 0 || freezeRows() > 0}
+        onGraph={() => setShowGraph(true)}
+        onHistory={() => setShowHistory(true)}
+        onDiff={() => setShowDiff(true)}
+        onBranch={() => setShowBranch(true)}
+        onPlugins={() => setShowPlugins(true)}
       />
       <FormulaBar a1={activeA1} value={activeRaw} onCommit={(t) => void commitEdit(t)} />
       <Grid
@@ -591,12 +760,22 @@ export function App() {
         onContextMenu={openContextMenu}
         remote={onRemoteChanged}
         find={findMatches}
+        cursors={remoteCursors}
+        freezeCols={freezeCols}
+        freezeRows={freezeRows}
       />
       <AccessibleGrid store={store} formulas={formulas} />
       <div role="status" aria-live="polite" style={VISUALLY_HIDDEN}>
         {announcement()}
       </div>
-      <SheetTabs />
+      <SheetTabs
+        sheets={sheetNames}
+        active={activeSheet}
+        onSelect={(n) => void switchSheet(n)}
+        onAdd={() => void addSheet()}
+        onDelete={(n) => void deleteSheet(n)}
+        onRename={(from, to) => void renameSheet(from, to)}
+      />
       <FindReplace
         open={findOpen()}
         matches={() => findMatches().size}
@@ -623,6 +802,31 @@ export function App() {
         />
       )}
       {showHelp() && <FormulaHelp onClose={() => setShowHelp(false)} />}
+      {showGraph() && <DependencyGraph engine={engine} onClose={() => setShowGraph(false)} />}
+      {showHistory() && (
+        <HistoryModal
+          engine={engine}
+          onClose={() => setShowHistory(false)}
+          onRefresh={() => void evaluateAndRefresh()}
+        />
+      )}
+      {showDiff() && (
+        <DiffModal
+          engine={engine}
+          onClose={() => setShowDiff(false)}
+          onRefresh={() => void evaluateAndRefresh()}
+        />
+      )}
+      {showBranch() && (
+        <BranchModal
+          engine={engine}
+          onClose={() => setShowBranch(false)}
+          onRefresh={() => void evaluateAndRefresh()}
+          onSheetsChanged={() => void refreshSheets()}
+          onSwitchTo={(n) => void switchSheet(n)}
+        />
+      )}
+      {showPlugins() && <UdfModal engine={engine} onClose={() => setShowPlugins(false)} />}
     </div>
   );
 }

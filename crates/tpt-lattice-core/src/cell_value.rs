@@ -148,7 +148,8 @@ impl core::fmt::Display for CellValue {
 /// Excel epoch offset: `serial 0` corresponds to 1899-12-30, and the Unix epoch
 /// (1970-01-01) is serial `25569`. Used to translate between civil dates and the
 /// serial numbers stored in [`CellValue::Date`].
-const EXCEL_EPOCH_OFFSET: i64 = 25569;
+/// Days between the Excel epoch (1899-12-30) and the Unix epoch (1970-01-01).
+pub const EXCEL_EPOCH_OFFSET: i64 = 25569;
 
 /// Convert a day count since the Unix epoch into a `(year, month, day)` civil date
 /// (Howard Hinnant's `civil_from_days` algorithm).
@@ -199,6 +200,14 @@ pub fn format_serial_date(serial: f64) -> String {
 /// Build an Excel serial number from a `(year, month, day)` civil date.
 pub fn serial_from_ymd(y: i32, m: u32, d: u32) -> f64 {
     (days_from_civil(y, m, d) + EXCEL_EPOCH_OFFSET) as f64
+}
+
+/// Decompose an Excel serial number into a `(year, month, day)` civil date.
+/// The time-of-day fraction is ignored.
+pub fn ymd_from_serial(serial: f64) -> (i32, u32, u32) {
+    let days = floor(serial) as i64;
+    let unix_days = days - EXCEL_EPOCH_OFFSET;
+    civil_from_days(unix_days)
 }
 
 #[cfg(test)]

@@ -166,6 +166,7 @@ fn p_atom_ident(input: &str) -> P<'_, Expr> {
                 a1: name.clone(),
                 abs_col: false,
                 abs_row: false,
+                sheet: None,
             }),
         )),
         Err(_) => Ok((input, Expr::Name(name))),
@@ -198,6 +199,7 @@ fn p_cellref(input: &str) -> P<'_, Expr> {
                 a1,
                 abs_col,
                 abs_row,
+                sheet: None,
             }),
         )),
         Err(_) => fail(rest, "invalid cell reference"),
@@ -209,7 +211,34 @@ fn p_paren(input: &str) -> P<'_, Expr> {
 }
 
 fn p_atom(input: &str) -> P<'_, Expr> {
-    alt((p_number, p_string, p_paren, p_atom_ident))(input)
+    // Optional leading `Sheet!` qualifier for cross-sheet references.
+    let (input, sheet) = opt(p_sheet)(input)?;
+    let (input, base) = alt((p_number, p_string, p_paren, p_atom_ident))(input)?;
+    let base = match base {
+        Expr::CellRef(mut c) => {
+            c.sheet = sheet;
+            Expr::CellRef(c)
+        }
+        Expr::Range { mut start, mut end } => {
+            start.sheet = sheet.clone();
+            end.sheet = sheet;
+            Expr::Range { start, end }
+        }
+        other => other,
+    };
+    Ok((input, base))
+}
+
+/// Parse an optional `Sheet!` prefix (an identifier immediately followed by `!`,
+/// but not `!=`). Returns the sheet name.
+fn p_sheet(input: &str) -> P<'_, String> {
+    let (rest, name) = ident(input)?;
+    let (rest, _) = char('!')(rest)?;
+    // `!=` is a binary operator, not a sheet prefix.
+    if rest.starts_with('=') {
+        return fail(rest, "not a sheet prefix");
+    }
+    Ok((rest, name))
 }
 
 // ---------------------------------------------------------------------------

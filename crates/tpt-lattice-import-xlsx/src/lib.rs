@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::io::Cursor;
 
 use calamine::{Data, Reader, Xlsx};
-use tpt_lattice_core::{CellId, CellValue, LatticeError};
+use tpt_lattice_core::{serial_from_ymd, CellId, CellValue, LatticeError};
 
 mod xlsx;
 
@@ -159,14 +159,41 @@ pub fn import_sheet(bytes: &[u8], sheet_name: &str) -> Result<ImportedSheet, Imp
     Ok(sheet)
 }
 
+/// Parse an ISO-8601 date/time string (e.g. `2020-03-15` or
+/// `2020-03-15T10:30:00`) into an Excel-style serial number. Returns `None` if
+/// the string is not a recognizable date.
+fn iso_to_date(s: &str) -> Option<f64> {
+    let date_part = s.split(['T', ' ']).next()?;
+    let mut parts = date_part.split('-');
+    let y: i32 = parts.next()?.parse().ok()?;
+    let m: u32 = parts.next()?.parse().ok()?;
+    let d: u32 = parts.next()?.parse().ok()?;
+    let mut serial = serial_from_ymd(y, m, d);
+    // Optional time component after a 'T' or space separator.
+    if let Some(idx) = s[date_part.len()..].find(|c| c == 'T' || c == ' ') {
+        let time = &s[date_part.len() + idx + 1..];
+        let mut tp = time.split(':');
+        if let (Some(hs), Some(ms), Some(ss)) = (tp.next(), tp.next(), tp.next()) {
+            let h: f64 = hs.parse().ok()?;
+            let m2: f64 = ms.parse().ok()?;
+            let s2: f64 = ss.parse().ok()?;
+            serial += (h * 3600.0 + m2 * 60.0 + s2) / 86_400.0;
+        }
+    }
+    Some(serial)
+}
+
 fn map_cell(data: &Data) -> CellValue {
     match data {
         Data::Int(i) => CellValue::Number(*i as f64),
         Data::Float(f) => CellValue::Number(*f),
         Data::String(s) => CellValue::Text(s.clone()),
         Data::Bool(b) => CellValue::Boolean(*b),
-        Data::DateTime(dt) => CellValue::Text(dt.to_string()),
-        Data::DateTimeIso(s) => CellValue::Text(s.clone()),
+        Data::DateTime(dt) => CellValue::Date(dt.as_f64()),
+        Data::DateTimeIso(s) => match iso_to_date(s) {
+            Some(serial) => CellValue::Date(serial),
+            None => CellValue::Text(s.clone()),
+        },
         Data::DurationIso(s) => CellValue::Text(s.clone()),
         Data::Error(e) => CellValue::Error(LatticeError::ref_error(e.to_string())),
         Data::Empty => CellValue::Empty,
@@ -299,5 +326,13 @@ mod tests {
             translate_excel_to_les("=SUM($A$1:$B$2)"),
             Some("=SUM(RANGE(A1,B2))".to_string())
         );
+    }
+
+    #[test]
+    fn iso_date_parsing() {
+        assert_eq!(iso_to_date("2020-03-15").unwrap(), serial_from_ymd(2020, 3, 15));
+        let noon = iso_to_date("2020-03-15T06:00:00").unwrap();
+        assert!((noon - (serial_from_ymd(2020, 3, 15) + 0.25)).abs() < 1e-9);
+        assert!(iso_to_date("not-a-date").is_none());
     }
 }

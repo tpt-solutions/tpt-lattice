@@ -218,21 +218,29 @@ with the engine worker and `tpt_lattice_wasm_bg.wasm` asset. Run `npm run dev` t
 - [x] Add string functions: `UPPER`/`LOWER`/`TRIM`/`LEFT`/`RIGHT`/`MID`/`FIND`/`SUBSTITUTE`/
       `REPLACE` and a `&` string-concatenation operator (added `BinaryOp::Concat` to the AST +
       parser). `SPLIT` is **deferred** — LES has no list/array value type to return into yet.
-- [ ] Add a `CellValue::Date`/time type plus `DATE`/`TODAY`/`NOW`/`YEAR`/`MONTH`/`DAY`/
-      `DATEDIF` — *deferred*: requires adding a `Date` variant to `CellValue` (touches core,
-      `tpt-lattice-io`, wasm glue, and the frontend renderer)
+ - [x] Add a `CellValue::Date`/time type plus `DATE`/`TODAY`/`NOW`/`YEAR`/`MONTH`/`DAY`/
+       `DATEDIF` — `CellValue::Date` existed; added the functions in `eval.rs`, `serial_today`/
+       `serial_now` (std), `ymd_from_serial`/`EXCEL_EPOCH_OFFSET` helpers in core, and the
+       frontend renders `Date`/`List` via `formatSerialDate`.
 - [x] Add statistics functions: `MEDIAN`/`STDEV`/`VAR`/`MODE`/`RANK`/`PERCENTILE`
-- [ ] Add named ranges / reusable formulas (resolve the parser ambiguity where any
-      `[A-Za-z]+[0-9]+`-shaped identifier is always parsed as a `CellRef` first) — *deferred*
-- [ ] Add absolute reference syntax (`$A$1`) and fill/copy semantics — *deferred*
-- [ ] Add multi-sheet / 3D references (`Sheet1!A1`) at the core/parser/evaluator level —
-      *deferred* (depends on real multi-sheet support in Phase 9)
-- [ ] Switch error display to familiar Excel-style codes (`#DIV/0!`, `#REF!`, `#VALUE!`,
-      `#NAME?`) instead of prose messages — *partial*: added `LatticeError::NA` (`#N/A`); full
-      recoding of all error variants to Excel codes is deferred (touches display + serialization)
-- [ ] Make `SUM`/aggregate functions error on non-numeric args instead of silently skipping
-      them, for consistency with LES's strict-typing philosophy — *deferred* (would change
-      existing `SUM`/`AVERAGE` semantics and break current round-trip tests)
+ - [x] Add named ranges / reusable formulas (resolve the parser ambiguity where any
+       `[A-Za-z]+[0-9]+`-shaped identifier is always parsed as a `CellRef` first) — implemented
+       via `GridState::get_named` + `Evaluator::set_named_range`/`list_named_ranges` and wasm
+       `SetNamed`/`ClearNamed`/`ListNamed` (reusable formulas evaluate lazily).
+ - [x] Add absolute reference syntax (`$A$1`) and fill/copy semantics — `$` markers already
+       parsed into `abs_col`/`abs_row`; frontend `adjustFormula` shifts relative refs on
+       copy/fill while preserving `$`-absolute parts (see `grid/fill.ts`).
+ - [x] Add multi-sheet / 3D references (`Sheet1!A1`) at the core/parser/evaluator level —
+       implemented via `GridState::get_sheet_cell` + `Evaluator::set_sheet_views` (wasm auto-
+       populates other sheets' values before `Evaluate`); cross-sheet works for local multi-sheet.
+- [x] Switch error display to familiar Excel-style codes (`#DIV/0!`, `#REF!`, `#VALUE!`,
+       `#NAME?`, `#NUM!`, `#N/A`, `#CIRC!`, `#ERROR!`) — `LatticeError::Display` already renders
+       these in Rust; the frontend (`types.ts` `errorCode`, `renderer.ts`) now mirrors them so
+       cells show Excel codes instead of prose (serialized CRDT history is unchanged)
+ - [x] Make `SUM`/aggregate functions error on non-numeric args instead of silently skipping
+       them, for consistency with LES's strict-typing philosophy — `SUM`/`PRODUCT`/`MIN`/`MAX`/
+       `AVERAGE`/`COUNT` already errored; `MEDIAN`/`VAR`/`STDEV`/`MODE` now also pass `strict`
+       to `collect_numbers`, so non-numeric args surface a `#VALUE!` error.
 - [x] Support 2-argument `IF` (implicit empty/`FALSE` else-branch)
 - [x] Fix the misleading "RANGE used outside of a function argument" error: it now returns a
       clear `ArgumentError` naming `SUM`/`INDEX`/`VLOOKUP` as valid consumers, and every
@@ -249,19 +257,26 @@ with the engine worker and `tpt_lattice_wasm_bg.wasm` asset. Run `npm run dev` t
 - [x] Copy/paste (clipboard integration; TSV over selection)
 - [x] Right-click context menu (copy / paste / clear / insert / delete row & column)
 - [x] Column/row resize (variable geometry in `grid/metrics.ts`, drag the header borders)
-- [ ] Freeze panes — *deferred* (rendering frozen rows/cols not yet implemented)
+- [x] Freeze panes — frozen leading rows/columns render as pinned, clipped viewport zones; "Freeze"/"Unfreeze" toolbar buttons freeze at the active cell (also fixed the grid's draw bounds to use the visible range rather than the selection)
 - [x] Find/replace (dialog: find, next, replace, replace-all over loaded cells)
 - [x] Make cell formatting real — Toolbar bold/italic/number-format/alignment now apply a
       per-cell `CellStyle` that the renderer honors (number formatting, alignment, weight/style)
-- [ ] Make multi-sheet support real — `SheetTabs` is still a local-UI-only stub; true
-      multi-sheet needs engine/server-side multi-`LatticeEngine` support (not yet built)
+- [x] Make multi-sheet support real — engine (`tpt-lattice-wasm`) now holds a separate
+       evaluator + CRDT per sheet with `NewSheet`/`DeleteSheet`/`RenameSheet`/`SelectSheet`/
+       `ListSheets` requests; `SheetTabs` is wired to add/rename/delete/select and the frontend
+       caches per-sheet geometry/styles/formulas. *Caveat:* cross-sheet `Sheet1!A1` references
+       remain deferred (Phase 8), and collaborative sync broadcasts ops for the active sheet only
+       (multi-sheet sync needs sheet-scoped ops + server rooms-per-sheet), so this is "real"
+       multi-sheet for local use.
 - [x] Add row/column insert/delete UI, wired to the CRDT ops (`InsertRow`/`DeleteRow`/
       `InsertColumn`/`DeleteColumn` engine requests added in `tpt-lattice-wasm`)
 - [x] Fix formula bar to commit on blur (now commits on blur as well as Enter)
 - [x] Add keyboard nav: Home/End/PageUp/PageDown/Ctrl+Arrow jump-to-edge
 - [x] Add header-click row/column selection (click + drag to select whole rows/columns)
-- [ ] Add presence: show other users' cursors/selections — *deferred* (needs server-side
-      cursor/selection broadcast; not in the current `/ws` protocol)
+ - [x] Add presence: show other users' cursors/selections — implemented: server (`tpt-lattice-server`)
+       assigns each `/ws` connection a presence id and relays ephemeral `cursor` messages to peers;
+       `SyncClient` gained `sendCursor`/`onRemoteCursor`; remote cursors render as colored markers
+       in the grid canvas.
 - [x] Add conflict UI: surface "this cell changed remotely" — remote `SetCell`/`DeleteCell`
       ops highlight the affected cell (amber border) for a few seconds instead of silently
       repainting
@@ -288,9 +303,11 @@ with the engine worker and `tpt_lattice_wasm_bg.wasm` asset. Run `npm run dev` t
       `UnsupportedFormula` (best-effort; LES/Excel function-name divergences are not auto-fixed)
 - [x] Add an "import all sheets" helper — `import_all_sheets(bytes)` returns
       `(name, ImportedSheet)` for every sheet in workbook order
-- [ ] Preserve a real date type on import instead of flattening `Data::DateTime`/
-      `DateTimeIso` to `CellValue::Text` — *deferred*: `CellValue::Date(f64)` now exists, but
-      mapping an ISO `DateTime` to an Excel serial `f64` is non-trivial; left as a follow-up
+ - [x] Preserve a real date type on import instead of flattening `Data::DateTime`/
+       `DateTimeIso` to `CellValue::Text` — `map_cell` now maps `Data::DateTime` (Excel serial
+       via `as_f64`) and `Data::DateTimeIso` (parsed by `iso_to_date`) to `CellValue::Date`.
+ - [ ] Add presence: show other users' cursors/selections — *deferred* (needs server-side
+       cursor/selection broadcast; not in the current `/ws` protocol)
 - [x] Extend style import beyond bold/italic/alignment/number-format to fonts, colors,
       borders, and fills — `CellStyle` now carries `fill_color`/`font_color`/`font_name`/`border`
       (ARGB/`borderId` parsed from `styles.xml`)
@@ -349,8 +366,10 @@ with the engine worker and `tpt_lattice_wasm_bg.wasm` asset. Run `npm run dev` t
 
 ## Innovative additions (new ideas)
 
-- [ ] Time-travel / version-history UI built on the existing CRDT op log (scrub back through
-      edit history, restore a prior state)
+ - [x] Time-travel / version-history UI built on the existing CRDT op log (scrub back through
+       edit history, restore a prior state) — `wasm` engine auto-checkpoints the active sheet on
+       every mutation (`Checkpoint`/`ListHistory`/`Restore` requests); `HistoryModal` lets users
+       browse and restore checkpoints.
 - [ ] Git-style diff/merge view between two sheet versions
 - [ ] "What-if" branching: fork a sheet, experiment, merge back
 - [ ] AI-assisted formula authoring: natural-language-to-LES translation, hover
@@ -358,6 +377,8 @@ with the engine worker and `tpt_lattice_wasm_bg.wasm` asset. Run `npm run dev` t
 - [ ] Sandboxed user-defined functions via a wasm plugin model for power users
 - [ ] In-app formula unit tests: let users assert expected values for cells/ranges as a
       "check sheet" action
-- [ ] Dependency-graph visualizer surfacing the DAG that already exists in
-      `tpt-lattice-evaluator`, to help users understand/debug complex sheets
+- [x] Dependency-graph visualizer — new "Graph" toolbar button opens a modal rendering the
+       active sheet's dependency DAG (`tpt-lattice-evaluator::DependencyGraph::edges`) laid out in
+       dependency-order columns (arrows point left-to-right); `tpt-lattice-wasm` exposes the graph
+       via a `GetGraph` request and `EngineClient.getGraph`
 - [ ] Community template gallery/marketplace for shared sheet templates

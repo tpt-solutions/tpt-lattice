@@ -17,6 +17,7 @@ import {
   rowY,
   colWidth,
   rowHeight,
+  visibleRange,
   type Range,
 } from "./metrics";
 
@@ -45,9 +46,13 @@ export interface GridProps {
   onContextMenu: (clientX: number, clientY: number, col: number, row: number) => void;
   remote: Accessor<Set<string>>;
   find: Accessor<Set<string>>;
+  cursors?: Accessor<Map<number, { cell: string; color: string }>>;
+  freezeCols: Accessor<number>;
+  freezeRows: Accessor<number>;
 }
 
-const BIG = 1_000_000;
+  const BIG = 1_000_000;
+  const BUFFER = 3;
 
 export function Grid(props: GridProps) {
   let container!: HTMLDivElement;
@@ -98,6 +103,19 @@ export function Grid(props: GridProps) {
     void props.heights();
     void props.remote();
     void props.find();
+    void props.cursors?.();
+    const range = visibleRange(
+      props.scrollX(),
+      props.scrollY(),
+      w,
+      h,
+      BUFFER,
+      props.widths(),
+      props.heights(),
+    );
+    const cursors = props.cursors
+      ? [...props.cursors().entries()].map(([actor, v]) => ({ actor, cell: v.cell, color: v.color }))
+      : [];
     drawGrid({
       ctx,
       width: w,
@@ -105,7 +123,7 @@ export function Grid(props: GridProps) {
       dpr,
       scrollX: props.scrollX(),
       scrollY: props.scrollY(),
-      range: props.store.selection,
+      range,
       cells: new Map(Object.entries(props.store.cells)),
       styles: new Map(Object.entries(props.store.styles)),
       active: props.store.active,
@@ -113,8 +131,11 @@ export function Grid(props: GridProps) {
       editing: props.store.editing,
       remote: props.remote(),
       find: props.find(),
+      cursors,
       widths: props.widths(),
       heights: props.heights(),
+      freezeCols: props.freezeCols(),
+      freezeRows: props.freezeRows(),
     });
   });
 
@@ -285,9 +306,11 @@ export function Grid(props: GridProps) {
 
   const editorPos = () => {
     const a = props.store.active;
+    const frozenCol = a.col < props.freezeCols();
+    const frozenRow = a.row < props.freezeRows();
     return {
-      x: colX(a.col, props.widths()) - props.scrollX(),
-      y: rowY(a.row, props.heights()) - props.scrollY(),
+      x: frozenCol ? colX(a.col, props.widths()) : colX(a.col, props.widths()) - props.scrollX(),
+      y: frozenRow ? rowY(a.row, props.heights()) : rowY(a.row, props.heights()) - props.scrollY(),
       w: colWidth(a.col, props.widths()),
       h: rowHeight(a.row, props.heights()),
     };

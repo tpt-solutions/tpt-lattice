@@ -233,6 +233,15 @@ impl DependencyGraph {
     pub fn node_count(&self) -> usize {
         self.graph.node_count()
     }
+
+    /// Every dependency edge as `(dependency, dependent)` pairs. An edge
+    /// `(D, C)` means *`C` depends on `D`*.
+    pub fn edges(&self) -> Vec<(CellId, CellId)> {
+        self.graph
+            .edge_references()
+            .map(|e| (self.graph[e.source()], self.graph[e.target()]))
+            .collect()
+    }
 }
 
 #[cfg(test)]
