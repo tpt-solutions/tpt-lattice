@@ -29,7 +29,7 @@ js-sys = "0.3"
 # transitive requirers), so both are enabled here. This is only enabled for
 # wasm builds so host/test builds are unaffected.
 [target.wasm32-unknown-unknown.dependencies]
-getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom = { version = "0.4", features = ["wasm_js"] }
 getrandom4 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
