@@ -15,4 +15,4 @@ tpt-lattice-core = { workspace = true, features = ["serde"] }
 tpt-lattice-io = { workspace = true }
 # OOXML is a zip container; we author the parts directly with the strings API so
 # the writer has no heavy XML dependency.
-zip = "0.6"
+zip = "8.6"
