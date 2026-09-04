@@ -18,7 +18,6 @@ function splitSegments(src: string): { text: string; isStr: boolean }[] {
       if (!inStr) {
         if (buf) {
           out.push({ text: buf, isStr: false });
-          buf = "";
         }
         inStr = true;
         buf = '"';

@@ -25,6 +25,10 @@ export default tseslint.config(
       // LES/Solid interop makes `any` pragmatic in a few glue spots; keep it a
       // warning rather than a hard error so CI stays green while we tighten up.
       "@typescript-eslint/no-explicit-any": "off",
+      // SolidJS's `let x!: T` + `ref={x}` pattern assigns via the JSX ref
+      // transform at runtime, which this rule can't see, so it flags every
+      // ref binding in the codebase as unassigned.
+      "no-unassigned-vars": "off",
       "@typescript-eslint/no-unused-vars": [
         "warn",
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
