@@ -282,7 +282,9 @@ impl core::fmt::Display for Expr {
                 }
                 write!(f, ")")
             }
-            Expr::Range { start, end } => write!(f, "RANGE({}, {})", start.display_a1(), end.display_a1()),
+            Expr::Range { start, end } => {
+                write!(f, "RANGE({}, {})", start.display_a1(), end.display_a1())
+            }
             Expr::Match { scrutinee, arms } => {
                 write!(f, "MATCH({scrutinee}")?;
                 for arm in arms {

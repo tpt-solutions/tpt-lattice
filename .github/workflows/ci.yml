@@ -71,7 +71,7 @@ jobs:
       - name: Build WASM package
         run: wasm-pack build crates/tpt-lattice-wasm --target web --out-dir pkg
       - name: Run wasm tests (node)
-        run: wasm-pack test crates/tpt-lattice-wasm --node
+        run: wasm-pack test --node crates/tpt-lattice-wasm
 
   frontend:
     name: Frontend (typecheck, test, build)
@@ -81,9 +81,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
       - name: npm ci
         working-directory: frontend
         run: npm ci
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: Build WASM package
+        run: wasm-pack build crates/tpt-lattice-wasm --target web --out-dir pkg
       - name: Lint
         working-directory: frontend
         run: npm run lint
@@ -93,10 +101,6 @@ jobs:
       - name: Test
         working-directory: frontend
         run: npm test
-      - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-      - name: Build WASM package
-        run: wasm-pack build crates/tpt-lattice-wasm --target web --out-dir pkg
       - name: Build frontend
         working-directory: frontend
         run: npm run build

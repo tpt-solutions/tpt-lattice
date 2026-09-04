@@ -4,7 +4,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
-use libm::{floor, fabs, round};
+use libm::{fabs, floor, round};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -89,9 +89,7 @@ impl CellValue {
     /// value. Finite numbers and every other variant pass through unchanged.
     pub fn sanitize(self) -> Self {
         match self {
-            CellValue::Number(n) if !n.is_finite() => {
-                CellValue::Error(LatticeError::NotANumber)
-            }
+            CellValue::Number(n) if !n.is_finite() => CellValue::Error(LatticeError::NotANumber),
             CellValue::Date(s) if !s.is_finite() => CellValue::Error(LatticeError::NotANumber),
             other => other,
         }
@@ -183,14 +181,14 @@ pub fn format_serial_date(serial: f64) -> String {
     if !serial.is_finite() {
         return "#NUM!".to_string();
     }
-        let days = floor(serial) as i64;
-        let unix_days = days - EXCEL_EPOCH_OFFSET;
-        let (y, m, d) = civil_from_days(unix_days);
-        let frac = serial - floor(serial);
-        if fabs(frac) < 1e-9 {
+    let days = floor(serial) as i64;
+    let unix_days = days - EXCEL_EPOCH_OFFSET;
+    let (y, m, d) = civil_from_days(unix_days);
+    let frac = serial - floor(serial);
+    if fabs(frac) < 1e-9 {
         return format!("{y:04}-{m:02}-{d:02}");
     }
-        let secs = round(frac * 86_400.0) as i64;
+    let secs = round(frac * 86_400.0) as i64;
     let hh = (secs / 3600) % 24;
     let mm = (secs / 60) % 60;
     let ss = secs % 60;

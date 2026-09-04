@@ -24,7 +24,11 @@ pub const MAX_RANGE_CELLS: usize = 1_000_000;
 /// collector ([`crate::Evaluator`]) and the evaluator's aggregate/lookup
 /// functions so the two copies cannot drift apart (previously duplicated in
 /// `lib.rs` and `eval.rs`).
-pub fn expand_range(start: &CellRef, end: &CellRef, out: &mut Vec<CellId>) -> Result<(), LatticeError> {
+pub fn expand_range(
+    start: &CellRef,
+    end: &CellRef,
+    out: &mut Vec<CellId>,
+) -> Result<(), LatticeError> {
     let (sc, sr) = start.id.to_rc();
     let (ec, er) = end.id.to_rc();
     let (c0, c1) = (sc.min(ec), sc.max(ec));

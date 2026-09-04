@@ -28,9 +28,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 #[cfg(target_arch = "wasm32")]
-use wasm_bindgen::prelude::*;
-#[cfg(target_arch = "wasm32")]
 use js_sys::{Float64Array, Function, Reflect, Uint8Array, WebAssembly};
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
 
 #[cfg(target_arch = "wasm32")]
 thread_local! {
@@ -64,7 +64,10 @@ pub fn register_plugin(name: &str, bytes: &[u8]) -> Result<(), String> {
             return Err(format!("plugin is missing required export '{sym}'"));
         }
     }
-    PLUGINS.with(|p| p.borrow_mut().insert(name.to_string(), JsValue::from(instance)));
+    PLUGINS.with(|p| {
+        p.borrow_mut()
+            .insert(name.to_string(), JsValue::from(instance))
+    });
     Ok(())
 }
 
@@ -201,6 +204,7 @@ pub fn list_plugins() -> Vec<String> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(dead_code)]
 pub fn invoke_plugin(_name: &str, _args: &[CellValue]) -> CellValue {
     CellValue::Error(LatticeError::name_error(_name))
 }

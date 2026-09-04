@@ -56,9 +56,6 @@ impl tpt_lattice_core::GridState for InMemoryGrid {
     }
 
     fn iter_cells(&self) -> Vec<(CellId, CellValue)> {
-        self.cells
-            .iter()
-            .map(|(&id, v)| (id, v.clone()))
-            .collect()
+        self.cells.iter().map(|(&id, v)| (id, v.clone())).collect()
     }
 }

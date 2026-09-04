@@ -23,8 +23,8 @@ use nom::branch::alt;
 use nom::bytes::complete::tag;
 use nom::character::complete::{alphanumeric1, anychar, char, digit1, multispace0, one_of};
 use nom::combinator::{map, not, opt, recognize, value};
-use nom::multi::many1;
 use nom::error::{Error as NomError, ErrorKind};
+use nom::multi::many1;
 use nom::sequence::{delimited, preceded, terminated, tuple};
 use nom::IResult;
 

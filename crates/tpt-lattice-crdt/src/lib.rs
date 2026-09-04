@@ -261,7 +261,7 @@ impl CrdtStore {
 
     /// Author an `InsertRow` op with a fresh ULID and apply it locally.
     pub fn insert_row(&mut self, after: Option<Ulid>) -> (Ulid, Op) {
-        let id = Ulid::new();
+        let id = Ulid::generate();
         let clock = self.clock.tick(self.actor);
         let op = Op::InsertRow {
             id,
@@ -275,7 +275,7 @@ impl CrdtStore {
 
     /// Author an `InsertColumn` op with a fresh ULID and apply it locally.
     pub fn insert_column(&mut self, after: Option<Ulid>) -> (Ulid, Op) {
-        let id = Ulid::new();
+        let id = Ulid::generate();
         let clock = self.clock.tick(self.actor);
         let op = Op::InsertColumn {
             id,
@@ -392,14 +392,24 @@ impl CrdtStore {
                     self.cell_clock.insert(key, prec);
                 }
             }
-            Op::InsertRow { id, after, clock, actor } => {
+            Op::InsertRow {
+                id,
+                after,
+                clock,
+                actor,
+            } => {
                 // Use the op's own causal timestamp (not local state) so that
                 // concurrent structural edits resolve identically on every peer.
                 let prec = (clock.total(), actor);
                 self.row_inserts.insert(id, (after, prec));
                 self.rebuild_layout();
             }
-            Op::InsertColumn { id, after, clock, actor } => {
+            Op::InsertColumn {
+                id,
+                after,
+                clock,
+                actor,
+            } => {
                 let prec = (clock.total(), actor);
                 self.col_inserts.insert(id, (after, prec));
                 self.rebuild_layout();

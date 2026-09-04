@@ -36,69 +36,123 @@ mod plugin;
 #[derive(serde::Deserialize)]
 #[serde(tag = "type")]
 pub enum Request {
-    SetCell { cell: String, value: CellValue },
-    SetFormula { cell: String, formula: String },
-    GetCell { cell: String },
+    SetCell {
+        cell: String,
+        value: CellValue,
+    },
+    SetFormula {
+        cell: String,
+        formula: String,
+    },
+    GetCell {
+        cell: String,
+    },
     Evaluate,
-    ApplyOps { ops: Vec<Op> },
+    ApplyOps {
+        ops: Vec<Op>,
+    },
     Reset,
     /// (Re)assign this replica's actor id. Each collaborative client must use a
     /// distinct id so the CRDT's last-writer-wins rule is deterministic.
-    Init { actor: ActorId },
+    Init {
+        actor: ActorId,
+    },
     /// Delete a cell (authored op; recorded in the outbox for sync).
-    DeleteCell { cell: String },
+    DeleteCell {
+        cell: String,
+    },
     /// Drain and return the ops this replica has authored since the last call.
     TakeOutbox,
     /// Return every materialized `(A1, value)` pair (for find/replace, copy).
     ListCells,
     /// Insert a row after `index` (or at the top when `index` is null).
-    InsertRow { index: Option<u64> },
+    InsertRow {
+        index: Option<u64>,
+    },
     /// Delete the row currently at `index`.
-    DeleteRow { index: u64 },
+    DeleteRow {
+        index: u64,
+    },
     /// Insert a column after `index` (or at the left edge when null).
-    InsertColumn { index: Option<u64> },
+    InsertColumn {
+        index: Option<u64>,
+    },
     /// Delete the column currently at `index`.
-    DeleteColumn { index: u64 },
+    DeleteColumn {
+        index: u64,
+    },
     /// Create a new (empty) sheet with the given name.
-    NewSheet { name: String },
+    NewSheet {
+        name: String,
+    },
     /// Delete a sheet by name (refused when it is the last sheet).
-    DeleteSheet { name: String },
+    DeleteSheet {
+        name: String,
+    },
     /// Rename a sheet (`from` -> `to`).
-    RenameSheet { from: String, to: String },
+    RenameSheet {
+        from: String,
+        to: String,
+    },
     /// Make `name` the active sheet for subsequent requests.
-    SelectSheet { name: String },
+    SelectSheet {
+        name: String,
+    },
     /// List sheet names and the active sheet.
     ListSheets,
     /// Return the active sheet's dependency graph (DAG) as A1 nodes + edges.
     GetGraph,
     /// Define or overwrite a named range / reusable formula on the active sheet.
-    SetNamed { name: String, expr: String },
+    SetNamed {
+        name: String,
+        expr: String,
+    },
     /// Remove a named range from the active sheet.
-    ClearNamed { name: String },
+    ClearNamed {
+        name: String,
+    },
     /// List the active sheet's named ranges as `(name, expression)` pairs.
     ListNamed,
     /// Capture the active sheet's current state as a named history checkpoint.
-    Checkpoint { label: String },
+    Checkpoint {
+        label: String,
+    },
     /// List the recorded history checkpoints as `(index, label)` pairs.
     ListHistory,
     /// Restore the active sheet to a previously captured checkpoint.
-    Restore { index: usize },
+    Restore {
+        index: usize,
+    },
     /// Snapshot the active sheet under a named version for later diffing/merging.
-    SaveVersion { label: String },
+    SaveVersion {
+        label: String,
+    },
     /// List saved versions as `(index, label, sheet)` tuples.
     ListVersions,
     /// Diff two saved versions (by index), left = before, right = after.
-    Diff { left: usize, right: usize },
+    Diff {
+        left: usize,
+        right: usize,
+    },
     /// Fork the active sheet into a new branch sheet for safe experimentation.
-    Fork { name: String },
+    Fork {
+        name: String,
+    },
     /// Merge a branch sheet back into the sheet it was forked from.
-    MergeBranch { name: String },
+    MergeBranch {
+        name: String,
+    },
     /// List branch sheets as `(name, parent)` pairs.
     ListBranches,
     /// Load a sandboxed user-defined-function plugin from wasm bytes.
-    RegisterUDF { name: String, bytes: Vec<u8> },
+    RegisterUDF {
+        name: String,
+        bytes: Vec<u8>,
+    },
     /// Remove a previously loaded UDF plugin by name.
-    UnregisterUDF { name: String },
+    UnregisterUDF {
+        name: String,
+    },
     /// List the names of currently loaded UDF plugins.
     ListUDFs,
 }
@@ -107,34 +161,65 @@ pub enum Request {
 #[derive(serde::Serialize)]
 #[serde(tag = "type")]
 pub enum Response {
-    Value { value: CellValue },
+    Value {
+        value: CellValue,
+    },
     Ok,
     Evaluated,
-    OpsAccepted { count: usize },
+    OpsAccepted {
+        count: usize,
+    },
     /// Locally-authored ops drained from the outbox.
-    Outbox { ops: Vec<Op> },
+    Outbox {
+        ops: Vec<Op>,
+    },
     /// A materialized cell: its A1 address and current value.
-    Cells { cells: Vec<CellListing> },
+    Cells {
+        cells: Vec<CellListing>,
+    },
     /// Sheet names and the active sheet.
-    Sheets { sheets: Vec<String>, active: String },
+    Sheets {
+        sheets: Vec<String>,
+        active: String,
+    },
     /// The dependency graph: node A1 labels and `(dependency, dependent)` edges.
-    Graph { nodes: Vec<String>, edges: Vec<(String, String)> },
+    Graph {
+        nodes: Vec<String>,
+        edges: Vec<(String, String)>,
+    },
     /// The named ranges of the active sheet.
-    Named { names: Vec<(String, String)> },
+    Named {
+        names: Vec<(String, String)>,
+    },
     /// The recorded history checkpoints as `(index, label)` pairs.
-    History { entries: Vec<(usize, String)> },
+    History {
+        entries: Vec<(usize, String)>,
+    },
     /// Saved versions as `(index, label, sheet)` tuples.
-    Versions { entries: Vec<(usize, String, String)> },
+    Versions {
+        entries: Vec<(usize, String, String)>,
+    },
     /// A cell-level diff between two versions.
-    Diff { rows: Vec<DiffRowJSON> },
+    Diff {
+        rows: Vec<DiffRowJSON>,
+    },
     /// Branch sheets as `(name, parent)` pairs.
-    Branches { entries: Vec<(String, String)> },
+    Branches {
+        entries: Vec<(String, String)>,
+    },
     /// The result of merging a branch back: how many cells auto-applied, and any
     /// conflicts that need manual resolution.
-    Merge { applied: usize, conflicts: Vec<MergeConflictJSON> },
+    Merge {
+        applied: usize,
+        conflicts: Vec<MergeConflictJSON>,
+    },
     /// The names of currently loaded UDF plugins.
-    UDFs { names: Vec<String> },
-    Error { message: String },
+    UDFs {
+        names: Vec<String>,
+    },
+    Error {
+        message: String,
+    },
 }
 
 /// A single materialized `(A1, value)` pair returned by [`Request::ListCells`].
@@ -228,6 +313,7 @@ struct BranchMeta {
     base: SheetSnapshot,
 }
 
+#[derive(Default)]
 struct State {
     sheets: HashMap<String, SheetState>,
     active: String,
@@ -237,19 +323,6 @@ struct State {
     versions: Vec<VersionEntry>,
     /// Branch sheets and their fork metadata, for "what-if" experimentation.
     branches: HashMap<String, BranchMeta>,
-}
-
-impl Default for State {
-    fn default() -> Self {
-        State {
-            sheets: HashMap::new(),
-            active: String::new(),
-            history: Vec::new(),
-            history_seq: 0,
-            versions: Vec::new(),
-            branches: HashMap::new(),
-        }
-    }
 }
 
 /// The engine handle exposed to JS. Wraps a map of sheets, each with its own
@@ -407,7 +480,11 @@ impl LatticeEngine {
                     let s = state.sheets.get_mut(&active).unwrap();
                     let clock = s.crdt.clock().clone();
                     let actor = s.crdt.actor();
-                    let op = Op::DeleteCell { cell: id, clock, actor };
+                    let op = Op::DeleteCell {
+                        cell: id,
+                        clock,
+                        actor,
+                    };
                     s.crdt.apply(op.clone());
                     s.outbox.push(op);
                     // Re-materialize the evaluator from the CRDT.
@@ -565,9 +642,11 @@ impl LatticeEngine {
             Request::SaveVersion { label } => {
                 let active = state.active.clone();
                 let snap = state.sheets.get(&active).unwrap().engine.snapshot();
-                state
-                    .versions
-                    .push(VersionEntry { label, sheet: active.clone(), snap });
+                state.versions.push(VersionEntry {
+                    label,
+                    sheet: active.clone(),
+                    snap,
+                });
                 Response::Ok
             }
             Request::ListVersions => {
@@ -673,17 +752,15 @@ impl LatticeEngine {
                     .collect();
                 Response::Branches { entries }
             }
-            Request::RegisterUDF { name, bytes } => {
-                match plugin::register_plugin(&name, &bytes) {
-                    Ok(()) => {
-                        for s in state.sheets.values_mut() {
-                            plugin::register_plugins_on(&mut s.engine);
-                        }
-                        Response::Ok
+            Request::RegisterUDF { name, bytes } => match plugin::register_plugin(&name, &bytes) {
+                Ok(()) => {
+                    for s in state.sheets.values_mut() {
+                        plugin::register_plugins_on(&mut s.engine);
                     }
-                    Err(e) => Response::Error { message: e },
+                    Response::Ok
                 }
-            }
+                Err(e) => Response::Error { message: e },
+            },
             Request::UnregisterUDF { name } => {
                 plugin::unregister_plugin(&name);
                 for s in state.sheets.values_mut() {
@@ -751,10 +828,7 @@ fn crdt_cells(crdt: &CrdtStore) -> Vec<(CellId, CellValue)> {
 
 /// Build a `sheet name -> (cell id -> value)` map of every sheet except the
 /// active one, used to resolve cross-sheet references during evaluation.
-fn all_sheet_views(
-    state: &State,
-    active: &str,
-) -> HashMap<String, HashMap<CellId, CellValue>> {
+fn all_sheet_views(state: &State, active: &str) -> HashMap<String, HashMap<CellId, CellValue>> {
     let mut views = HashMap::new();
     for (name, sheet) in &state.sheets {
         if name == active {
@@ -775,7 +849,11 @@ fn record_checkpoint(state: &mut State, active: &str, label: String) {
         Some(s) => (crdt_cells(&s.crdt), s.engine.list_formulas()),
         None => return,
     };
-    state.history.push(Snapshot { label, cells, formulas });
+    state.history.push(Snapshot {
+        label,
+        cells,
+        formulas,
+    });
     if state.history.len() > MAX_HISTORY {
         state.history.remove(0);
     }
@@ -825,7 +903,11 @@ fn diff_status(kind: DiffKind) -> &'static str {
 /// serialized as `null` so the UI can treat them as "no cell").
 fn to_diff_cell_json(c: &tpt_lattice_evaluator::CellSnapshot) -> DiffCellJSON {
     DiffCellJSON {
-        value: if c.value.is_empty() { None } else { Some(c.value.clone()) },
+        value: if c.value.is_empty() {
+            None
+        } else {
+            Some(c.value.clone())
+        },
         formula: c.formula.clone(),
     }
 }
@@ -868,7 +950,7 @@ fn error_response(message: &str) -> String {
 // host `cargo test --workspace` run is unaffected (the crate is a `cdylib`).
 #[cfg(all(test, target_arch = "wasm32"))]
 mod wasm_tests {
-use tpt_lattice_core::{CellId, CellValue, GridState};
+    use tpt_lattice_core::{CellId, CellValue};
     use tpt_lattice_evaluator::Evaluator;
     use wasm_bindgen_test::wasm_bindgen_test;
 

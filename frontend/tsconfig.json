@@ -17,7 +17,6 @@
     "allowSyntheticDefaultImports": true,
     "forceConsistentCasingInFileNames": true,
     "noEmit": true,
-    "baseUrl": ".",
     "paths": {
       "@engine/*": ["../crates/tpt-lattice-wasm/pkg/*"]
     }

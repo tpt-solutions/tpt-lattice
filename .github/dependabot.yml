@@ -8,6 +8,15 @@ updates:
     labels:
       - "dependencies"
       - "rust"
+    ignore:
+      # tpt-lattice-wasm intentionally pins two semver-incompatible major
+      # versions of getrandom side by side (via the `getrandom4` package
+      # alias) to enable the `wasm_js` backend for whichever version each
+      # transitive dependency in the graph pulls in. Bumping the plain
+      # `getrandom` requirement collapses both entries onto the same
+      # version, which Cargo rejects ("depends on crate `getrandom`
+      # multiple times with different names"). Update this pin by hand.
+      - dependency-name: "getrandom"
 
   - package-ecosystem: "npm"
     directory: "/frontend"

@@ -149,9 +149,13 @@ fn eval_date_binary(op: BinaryOp, l: &CellValue, r: &CellValue) -> Option<CellVa
     use CellValue::*;
     match (l, r) {
         (Date(a), Date(b)) if matches!(op, BinaryOp::Sub) => Some(Number(a - b)),
-        (Date(a), Number(b)) if matches!(op, BinaryOp::Add | BinaryOp::Sub) => Some(Date(
-            if matches!(op, BinaryOp::Add) { a + b } else { a - b },
-        )),
+        (Date(a), Number(b)) if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
+            Some(Date(if matches!(op, BinaryOp::Add) {
+                a + b
+            } else {
+                a - b
+            }))
+        }
         (Number(a), Date(b)) if matches!(op, BinaryOp::Add) => Some(Date(a + b)),
         _ => None,
     }
@@ -245,9 +249,13 @@ fn eval_cast(
             CellValue::Boolean(b) => CellValue::Text(b.to_string()),
             CellValue::Error(e) => CellValue::Text(format!("#{e}")),
             CellValue::Date(d) => CellValue::Text(format_serial_date(d)),
-            CellValue::List(items) => {
-                CellValue::Text(items.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", "))
-            }
+            CellValue::List(items) => CellValue::Text(
+                items
+                    .iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
             CellValue::Empty => CellValue::Text(String::new()),
         },
         CastKind::Boolean => match v {
@@ -433,10 +441,7 @@ fn collect_numbers(
                         CellValue::Empty => {}
                         CellValue::Error(e) => return Err(e),
                         other if strict => {
-                            return Err(LatticeError::type_error(
-                                "Number",
-                                variant_name(&other),
-                            ))
+                            return Err(LatticeError::type_error("Number", variant_name(&other)))
                         }
                         _ => {}
                     }
@@ -454,9 +459,7 @@ fn collect_numbers(
             other => match eval_expr(other, grid, env) {
                 CellValue::Number(n) => out.push(n),
                 CellValue::Error(e) => return Err(e),
-                v if strict => {
-                    return Err(LatticeError::type_error("Number", variant_name(&v)))
-                }
+                v if strict => return Err(LatticeError::type_error("Number", variant_name(&v))),
                 _ => {}
             },
         }
@@ -600,7 +603,9 @@ fn concat(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellVal
             CellValue::Boolean(b) => out.push_str(&b.to_string()),
             CellValue::Error(e) => return CellValue::Error(e),
             CellValue::Date(d) => out.push_str(&format_serial_date(d)),
-            CellValue::List(_) => return CellValue::Error(LatticeError::type_error("Text", "List")),
+            CellValue::List(_) => {
+                return CellValue::Error(LatticeError::type_error("Text", "List"))
+            }
             CellValue::Empty => {}
         }
     }
@@ -704,20 +709,20 @@ fn concat_values(l: CellValue, r: CellValue) -> CellValue {
 /// Evaluate `arg` to a text value, coercing numbers/booleans (as Excel does for
 /// string functions). Errors propagate; values that cannot be reasonably coerced
 /// become a [`LatticeError::TypeError`].
-fn eval_text(
-    arg: &Expr,
-    grid: &dyn GridState,
-    env: &mut HashMap<String, CellValue>,
-) -> CellValue {
+fn eval_text(arg: &Expr, grid: &dyn GridState, env: &mut HashMap<String, CellValue>) -> CellValue {
     match eval_expr(arg, grid, env) {
         CellValue::Text(s) => CellValue::Text(s),
         CellValue::Number(n) => CellValue::Text(n.to_string()),
         CellValue::Boolean(b) => CellValue::Text(b.to_string()),
         CellValue::Empty => CellValue::Text(String::new()),
         CellValue::Date(d) => CellValue::Text(format_serial_date(d)),
-        CellValue::List(items) => {
-            CellValue::Text(items.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", "))
-        }
+        CellValue::List(items) => CellValue::Text(
+            items
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
         e @ CellValue::Error(_) => e,
     }
 }
@@ -771,11 +776,7 @@ fn iferror_fn(
     }
 }
 
-fn ifna_fn(
-    args: &[Expr],
-    grid: &dyn GridState,
-    env: &mut HashMap<String, CellValue>,
-) -> CellValue {
+fn ifna_fn(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValue>) -> CellValue {
     if args.len() != 2 {
         return count_error("IFNA");
     }
@@ -828,7 +829,10 @@ fn left_right(
     let piece: String = if from_left {
         chars.iter().take(count).collect()
     } else {
-        chars.iter().skip(chars.len().saturating_sub(count)).collect()
+        chars
+            .iter()
+            .skip(chars.len().saturating_sub(count))
+            .collect()
     };
     CellValue::Text(piece)
 }
@@ -1108,7 +1112,10 @@ fn countif(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellVa
     };
     let cond = eval_expr(&args[1], grid, env);
     let crit = parse_criterion(&cond);
-    let n = values.iter().filter(|v| matches_criterion(v, &crit)).count();
+    let n = values
+        .iter()
+        .filter(|v| matches_criterion(v, &crit))
+        .count();
     CellValue::Number(n as f64)
 }
 
@@ -1211,7 +1218,13 @@ fn sumifs(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellVal
         .iter()
         .enumerate()
         .filter(|(j, _)| mask[*j])
-        .filter_map(|(_, v)| if let CellValue::Number(n) = v { Some(*n) } else { None })
+        .filter_map(|(_, v)| {
+            if let CellValue::Number(n) = v {
+                Some(*n)
+            } else {
+                None
+            }
+        })
         .sum();
     CellValue::Number(sum)
 }
@@ -1306,11 +1319,7 @@ fn vlookup(
     CellValue::Error(LatticeError::na())
 }
 
-fn xlookup(
-    args: &[Expr],
-    grid: &dyn GridState,
-    env: &mut HashMap<String, CellValue>,
-) -> CellValue {
+fn xlookup(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValue>) -> CellValue {
     if !(3..=6).contains(&args.len()) {
         return count_error("XLOOKUP");
     }
@@ -1328,9 +1337,7 @@ fn xlookup(
             if k < ret.len() {
                 return grid.get_cell(ret[k]).sanitize();
             }
-            return CellValue::Error(LatticeError::ref_error(
-                "XLOOKUP return index out of range",
-            ));
+            return CellValue::Error(LatticeError::ref_error("XLOOKUP return index out of range"));
         }
     }
     if args.len() >= 4 {
@@ -1385,11 +1392,7 @@ fn stdev(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValu
     }
 }
 
-fn mode_fn(
-    args: &[Expr],
-    grid: &dyn GridState,
-    env: &mut HashMap<String, CellValue>,
-) -> CellValue {
+fn mode_fn(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValue>) -> CellValue {
     match collect_numbers(args, grid, env, true) {
         Ok(nums) => {
             if nums.is_empty() {
@@ -1437,7 +1440,13 @@ fn rank_fn(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellVa
     };
     let numbers: Vec<f64> = list
         .iter()
-        .filter_map(|v| if let CellValue::Number(n) = v { Some(*n) } else { None })
+        .filter_map(|v| {
+            if let CellValue::Number(n) = v {
+                Some(*n)
+            } else {
+                None
+            }
+        })
         .collect();
     let rank = if order == 0 {
         1 + numbers.iter().filter(|&&x| x > target).count()
@@ -1471,7 +1480,13 @@ fn percentile(
     }
     let mut nums: Vec<f64> = list
         .iter()
-        .filter_map(|v| if let CellValue::Number(n) = v { Some(*n) } else { None })
+        .filter_map(|v| {
+            if let CellValue::Number(n) = v {
+                Some(*n)
+            } else {
+                None
+            }
+        })
         .collect();
     if nums.is_empty() {
         return CellValue::Error(LatticeError::argument_error(
@@ -1518,10 +1533,7 @@ fn as_serial(v: &CellValue) -> Result<f64, CellValue> {
         CellValue::Date(s) => Ok(*s),
         CellValue::Number(n) => Ok(*n),
         CellValue::Error(e) => Err(CellValue::Error(e.clone())),
-        CellValue::Empty => Err(CellValue::Error(LatticeError::type_error(
-            "Date",
-            "Empty",
-        ))),
+        CellValue::Empty => Err(CellValue::Error(LatticeError::type_error("Date", "Empty"))),
         other => Err(CellValue::Error(LatticeError::type_error(
             "Date",
             variant_name(other),
@@ -1546,11 +1558,7 @@ fn eval_int_arg(
     }
 }
 
-fn date_fn(
-    args: &[Expr],
-    grid: &dyn GridState,
-    env: &mut HashMap<String, CellValue>,
-) -> CellValue {
+fn date_fn(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValue>) -> CellValue {
     if args.len() != 3 {
         return count_error("DATE");
     }
@@ -1594,11 +1602,7 @@ fn now_fn(args: &[Expr]) -> CellValue {
     CellValue::Date(serial_now())
 }
 
-fn year_fn(
-    args: &[Expr],
-    grid: &dyn GridState,
-    env: &mut HashMap<String, CellValue>,
-) -> CellValue {
+fn year_fn(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValue>) -> CellValue {
     if args.len() != 1 {
         return count_error("YEAR");
     }
@@ -1628,11 +1632,7 @@ fn month_fn(
     }
 }
 
-fn day_fn(
-    args: &[Expr],
-    grid: &dyn GridState,
-    env: &mut HashMap<String, CellValue>,
-) -> CellValue {
+fn day_fn(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValue>) -> CellValue {
     if args.len() != 1 {
         return count_error("DAY");
     }
@@ -1645,13 +1645,7 @@ fn day_fn(
     }
 }
 
-
-
-fn datedif(
-    args: &[Expr],
-    grid: &dyn GridState,
-    env: &mut HashMap<String, CellValue>,
-) -> CellValue {
+fn datedif(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValue>) -> CellValue {
     if args.len() != 3 {
         return count_error("DATEDIF");
     }
@@ -1671,9 +1665,7 @@ fn datedif(
     let unit = match eval_text(&args[2], grid, env) {
         CellValue::Text(s) => s.to_uppercase(),
         CellValue::Error(e) => return CellValue::Error(e),
-        other => {
-            return CellValue::Error(LatticeError::type_error("Text", variant_name(&other)))
-        }
+        other => return CellValue::Error(LatticeError::type_error("Text", variant_name(&other))),
     };
     let (sy, sm, sd) = ymd_from_serial(start);
     let (ey, em, ed) = ymd_from_serial(end);

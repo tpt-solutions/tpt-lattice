@@ -72,11 +72,7 @@ pub struct CellStyle {
 /// Enrich `sheet` with the merged-cell regions and per-cell styles found in the
 /// raw `bytes` for the given `sheet_name`. Best-effort: any part that cannot be
 /// read is skipped, leaving the corresponding fields empty.
-pub(crate) fn attach_styles_and_merges(
-    bytes: &[u8],
-    sheet_name: &str,
-    sheet: &mut ImportedSheet,
-) {
+pub(crate) fn attach_styles_and_merges(bytes: &[u8], sheet_name: &str, sheet: &mut ImportedSheet) {
     if let Some(styles_xml) = read_styles_xml(bytes) {
         let table = parse_styles(&styles_xml);
         if let Some(path) = worksheet_path(bytes, sheet_name) {
@@ -85,9 +81,7 @@ pub(crate) fn attach_styles_and_merges(
                 sheet.merged_cells = merged;
                 sheet.styles = cell_styles
                     .into_iter()
-                    .filter_map(|(cell, idx)| {
-                        build_style(&table, idx).map(|s| (cell, s))
-                    })
+                    .filter_map(|(cell, idx)| build_style(&table, idx).map(|s| (cell, s)))
                     .collect();
             }
         }
@@ -144,17 +138,17 @@ fn normalize_target(target: &str) -> String {
 fn parse_sheet_name_to_rid(xml: &str) -> BTreeMap<String, String> {
     let mut map = BTreeMap::new();
     let mut reader = Reader::from_str(xml);
-    reader.trim_text(true);
+    reader.config_mut().trim_text(true);
     let mut buf = Vec::new();
     while let Ok(event) = reader.read_event_into(&mut buf) {
         if let Event::Start(e) | Event::Empty(e) = &event {
-            if e.name().as_ref() == b"sheet" {
+            if e.name().as_ref() == "sheet" {
                 let mut name = None;
                 let mut rid = None;
                 for a in e.attributes().flatten() {
                     match a.key.as_ref() {
-                        b"name" => name = str_from(&a.value).map(str::to_string),
-                        b"r:id" | b"rId" => rid = str_from(&a.value).map(str::to_string),
+                        "name" => name = Some(a.value.into_owned()),
+                        "r:id" | "rId" => rid = Some(a.value.into_owned()),
                         _ => {}
                     }
                 }
@@ -173,17 +167,17 @@ fn parse_sheet_name_to_rid(xml: &str) -> BTreeMap<String, String> {
 fn parse_rid_to_target(xml: &str) -> BTreeMap<String, String> {
     let mut map = BTreeMap::new();
     let mut reader = Reader::from_str(xml);
-    reader.trim_text(true);
+    reader.config_mut().trim_text(true);
     let mut buf = Vec::new();
     while let Ok(event) = reader.read_event_into(&mut buf) {
         if let Event::Start(e) | Event::Empty(e) = &event {
-            if e.name().as_ref() == b"Relationship" {
+            if e.name().as_ref() == "Relationship" {
                 let mut id = None;
                 let mut target = None;
                 for a in e.attributes().flatten() {
                     match a.key.as_ref() {
-                        b"Id" | b"id" => id = str_from(&a.value).map(str::to_string),
-                        b"Target" | b"target" => target = str_from(&a.value).map(str::to_string),
+                        "Id" | "id" => id = Some(a.value.into_owned()),
+                        "Target" | "target" => target = Some(a.value.into_owned()),
                         _ => {}
                     }
                 }
@@ -203,14 +197,12 @@ fn parse_rid_to_target(xml: &str) -> BTreeMap<String, String> {
 // Worksheet parsing: merged cells + per-cell style indices
 // ---------------------------------------------------------------------------
 
-fn parse_worksheet(
-    xml: &str,
-) -> (Vec<MergedRegion>, BTreeMap<CellId, u32>) {
+fn parse_worksheet(xml: &str) -> (Vec<MergedRegion>, BTreeMap<CellId, u32>) {
     let mut merged = Vec::new();
     let mut styles: BTreeMap<CellId, u32> = BTreeMap::new();
     let mut in_merge = false;
     let mut reader = Reader::from_str(xml);
-    reader.trim_text(true);
+    reader.config_mut().trim_text(true);
     let mut buf = Vec::new();
     while let Ok(event) = reader.read_event_into(&mut buf) {
         match &event {
@@ -219,23 +211,23 @@ fn parse_worksheet(
                 let name = qn.as_ref();
                 let is_empty = matches!(event, Event::Empty(_));
                 match name {
-                    b"mergeCells" => in_merge = true,
-                    b"mergeCell" if in_merge => {
+                    "mergeCells" => in_merge = true,
+                    "mergeCell" if in_merge => {
                         for a in e.attributes().flatten() {
-                            if a.key.as_ref() == b"ref" {
+                            if a.key.as_ref() == "ref" {
                                 if let Some(mr) = parse_merge_ref(&a.value) {
                                     merged.push(mr);
                                 }
                             }
                         }
                     }
-                    b"c" => {
+                    "c" => {
                         let mut r: Option<String> = None;
                         let mut s: Option<u32> = None;
                         for a in e.attributes().flatten() {
                             match a.key.as_ref() {
-                                b"r" => r = str_from(&a.value).map(str::to_string),
-                                b"s" => s = parse_u32(&a.value),
+                                "r" => r = Some(a.value.into_owned()),
+                                "s" => s = parse_u32(&a.value),
                                 _ => {}
                             }
                         }
@@ -247,12 +239,12 @@ fn parse_worksheet(
                     }
                     _ => {}
                 }
-                if is_empty && name == b"mergeCells" {
+                if is_empty && name == "mergeCells" {
                     in_merge = false;
                 }
             }
             Event::End(e) => {
-                if e.name().as_ref() == b"mergeCells" {
+                if e.name().as_ref() == "mergeCells" {
                     in_merge = false;
                 }
             }
@@ -265,12 +257,14 @@ fn parse_worksheet(
 }
 
 /// Parse an Excel range ref such as `A1:C3` into a [`MergedRegion`].
-fn parse_merge_ref(v: &[u8]) -> Option<MergedRegion> {
-    let s = str_from(v)?;
-    let (a, b) = s.split_once(':')?;
+fn parse_merge_ref(v: &str) -> Option<MergedRegion> {
+    let (a, b) = v.split_once(':')?;
     let top_left = CellId::try_from_a1(a.trim()).ok()?;
     let bottom_right = CellId::try_from_a1(b.trim()).ok()?;
-    Some(MergedRegion { top_left, bottom_right })
+    Some(MergedRegion {
+        top_left,
+        bottom_right,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -321,7 +315,7 @@ fn parse_styles(xml: &str) -> StyleTable {
     let mut in_fills = false;
 
     let mut reader = Reader::from_str(xml);
-    reader.trim_text(true);
+    reader.config_mut().trim_text(true);
     let mut buf = Vec::new();
     while let Ok(event) = reader.read_event_into(&mut buf) {
         let is_empty = matches!(event, Event::Empty(_));
@@ -330,75 +324,75 @@ fn parse_styles(xml: &str) -> StyleTable {
                 let qn = e.name();
                 let name = qn.as_ref();
                 match name {
-                    b"fonts" => in_fonts = true,
-                    b"font" if in_fonts => cur_font = Some(FontStyle::default()),
-                    b"b" if cur_font.is_some() => cur_font.as_mut().unwrap().bold = true,
-                    b"i" if cur_font.is_some() => cur_font.as_mut().unwrap().italic = true,
-                    b"color" if cur_font.is_some() => {
+                    "fonts" => in_fonts = true,
+                    "font" if in_fonts => cur_font = Some(FontStyle::default()),
+                    "b" if cur_font.is_some() => cur_font.as_mut().unwrap().bold = true,
+                    "i" if cur_font.is_some() => cur_font.as_mut().unwrap().italic = true,
+                    "color" if cur_font.is_some() => {
                         for a in e.attributes().flatten() {
-                            if a.key.as_ref() == b"rgb" {
-                                cur_font.as_mut().unwrap().color = str_from(&a.value).map(str::to_string);
+                            if a.key.as_ref() == "rgb" {
+                                cur_font.as_mut().unwrap().color = Some(a.value.into_owned());
                             }
                         }
                     }
-                    b"name" if cur_font.is_some() => {
+                    "name" if cur_font.is_some() => {
                         for a in e.attributes().flatten() {
-                            if a.key.as_ref() == b"val" {
-                                cur_font.as_mut().unwrap().name = str_from(&a.value).map(str::to_string);
+                            if a.key.as_ref() == "val" {
+                                cur_font.as_mut().unwrap().name = Some(a.value.into_owned());
                             }
                         }
                     }
 
-                    b"cellXfs" => in_cellxfs = true,
-                    b"xf" if in_cellxfs => {
+                    "cellXfs" => in_cellxfs = true,
+                    "xf" if in_cellxfs => {
                         let mut xf = Xf::default();
                         for a in e.attributes().flatten() {
                             match a.key.as_ref() {
-                                b"fontId" => xf.font_id = parse_u32(&a.value).unwrap_or(0),
-                                b"numFmtId" => xf.num_fmt_id = parse_u32(&a.value).unwrap_or(0),
-                                b"fillId" => xf.fill_id = parse_u32(&a.value).unwrap_or(0),
-                                b"borderId" => xf.border_id = parse_u32(&a.value).unwrap_or(0),
+                                "fontId" => xf.font_id = parse_u32(&a.value).unwrap_or(0),
+                                "numFmtId" => xf.num_fmt_id = parse_u32(&a.value).unwrap_or(0),
+                                "fillId" => xf.fill_id = parse_u32(&a.value).unwrap_or(0),
+                                "borderId" => xf.border_id = parse_u32(&a.value).unwrap_or(0),
                                 _ => {}
                             }
                         }
                         cur_xf = Some(xf);
                     }
-                    b"alignment" if cur_xf.is_some() => {
+                    "alignment" if cur_xf.is_some() => {
                         let xf = cur_xf.as_mut().unwrap();
                         for a in e.attributes().flatten() {
                             match a.key.as_ref() {
-                                b"horizontal" => xf.horizontal = parse_halign(&a.value),
-                                b"vertical" => xf.vertical = parse_valign(&a.value),
+                                "horizontal" => xf.horizontal = parse_halign(&a.value),
+                                "vertical" => xf.vertical = parse_valign(&a.value),
                                 _ => {}
                             }
                         }
                     }
 
-                    b"fills" => in_fills = true,
-                    b"fill" if in_fills => {
+                    "fills" => in_fills = true,
+                    "fill" if in_fills => {
                         if is_empty {
                             fills.push(None);
                         } else {
                             cur_fill = Some(None);
                         }
                     }
-                    b"fgColor" if in_fills => {
+                    "fgColor" if in_fills => {
                         for a in e.attributes().flatten() {
-                            if a.key.as_ref() == b"rgb" {
+                            if a.key.as_ref() == "rgb" {
                                 if let Some(f) = cur_fill.as_mut() {
-                                    *f = str_from(&a.value).map(str::to_string);
+                                    *f = Some(a.value.into_owned());
                                 }
                             }
                         }
                     }
-                    b"numFmts" => in_numfmts = true,
-                    b"numFmt" if in_numfmts => {
+                    "numFmts" => in_numfmts = true,
+                    "numFmt" if in_numfmts => {
                         let mut id = None;
                         let mut code = None;
                         for a in e.attributes().flatten() {
                             match a.key.as_ref() {
-                                b"numFmtId" => id = parse_u32(&a.value),
-                                b"formatCode" => code = str_from(&a.value).map(str::to_string),
+                                "numFmtId" => id = parse_u32(&a.value),
+                                "formatCode" => code = Some(a.value.into_owned()),
                                 _ => {}
                             }
                         }
@@ -410,17 +404,17 @@ fn parse_styles(xml: &str) -> StyleTable {
                 }
 
                 // Self-closing variants need to be finalized inline.
-                if is_empty && name == b"xf" && in_cellxfs {
+                if is_empty && name == "xf" && in_cellxfs {
                     if let Some(x) = cur_xf.take() {
                         cell_xfs.push(x);
                     }
                 }
-                if is_empty && name == b"numFmt" && in_numfmts {
+                if is_empty && name == "numFmt" && in_numfmts {
                     if let Some((id, code)) = cur_numfmt.take() {
                         num_fmts.insert(id, code);
                     }
                 }
-                if is_empty && name == b"font" && in_fonts {
+                if is_empty && name == "font" && in_fonts {
                     if let Some(f) = cur_font.take() {
                         fonts.push(f);
                     }
@@ -430,26 +424,26 @@ fn parse_styles(xml: &str) -> StyleTable {
                 let qn = e.name();
                 let name = qn.as_ref();
                 match name {
-                    b"fonts" => in_fonts = false,
-                    b"font" if in_fonts => {
+                    "fonts" => in_fonts = false,
+                    "font" if in_fonts => {
                         if let Some(f) = cur_font.take() {
                             fonts.push(f);
                         }
                     }
-                    b"cellXfs" => in_cellxfs = false,
-                    b"xf" if in_cellxfs => {
+                    "cellXfs" => in_cellxfs = false,
+                    "xf" if in_cellxfs => {
                         if let Some(x) = cur_xf.take() {
                             cell_xfs.push(x);
                         }
                     }
-                    b"numFmts" => in_numfmts = false,
-                    b"numFmt" if in_numfmts => {
+                    "numFmts" => in_numfmts = false,
+                    "numFmt" if in_numfmts => {
                         if let Some((id, code)) = cur_numfmt.take() {
                             num_fmts.insert(id, code);
                         }
                     }
-                    b"fills" => in_fills = false,
-                    b"fill" if in_fills => {
+                    "fills" => in_fills = false,
+                    "fill" if in_fills => {
                         if let Some(f) = cur_fill.take() {
                             fills.push(f);
                         }
@@ -462,7 +456,12 @@ fn parse_styles(xml: &str) -> StyleTable {
         }
         buf.clear();
     }
-    StyleTable { fonts, cell_xfs, num_fmts, fills }
+    StyleTable {
+        fonts,
+        cell_xfs,
+        num_fmts,
+        fills,
+    }
 }
 
 fn build_style(table: &StyleTable, idx: u32) -> Option<CellStyle> {
@@ -519,16 +518,12 @@ fn builtin_numfmt(id: u32) -> Option<String> {
 // Small attribute/value helpers
 // ---------------------------------------------------------------------------
 
-fn str_from(v: &[u8]) -> Option<&str> {
-    std::str::from_utf8(v).ok()
+fn parse_u32(v: &str) -> Option<u32> {
+    v.parse().ok()
 }
 
-fn parse_u32(v: &[u8]) -> Option<u32> {
-    std::str::from_utf8(v).ok()?.parse().ok()
-}
-
-fn parse_halign(v: &[u8]) -> Option<HorizontalAlign> {
-    match str_from(v)?.to_ascii_lowercase().as_str() {
+fn parse_halign(v: &str) -> Option<HorizontalAlign> {
+    match v.to_ascii_lowercase().as_str() {
         "left" => Some(HorizontalAlign::Left),
         "center" => Some(HorizontalAlign::Center),
         "right" => Some(HorizontalAlign::Right),
@@ -540,8 +535,8 @@ fn parse_halign(v: &[u8]) -> Option<HorizontalAlign> {
     }
 }
 
-fn parse_valign(v: &[u8]) -> Option<VerticalAlign> {
-    match str_from(v)?.to_ascii_lowercase().as_str() {
+fn parse_valign(v: &str) -> Option<VerticalAlign> {
+    match v.to_ascii_lowercase().as_str() {
         "top" => Some(VerticalAlign::Top),
         "center" => Some(VerticalAlign::Center),
         "bottom" => Some(VerticalAlign::Bottom),
@@ -603,10 +598,10 @@ mod tests {
 
     #[test]
     fn merge_ref_parsing() {
-        let mr = parse_merge_ref(b"A1:C3").unwrap();
+        let mr = parse_merge_ref("A1:C3").unwrap();
         assert_eq!(mr.top_left, CellId::from_a1("A1"));
         assert_eq!(mr.bottom_right, CellId::from_a1("C3"));
-        assert!(parse_merge_ref(b"A1").is_none());
+        assert!(parse_merge_ref("A1").is_none());
     }
 
     #[test]

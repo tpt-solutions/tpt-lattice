@@ -5,7 +5,7 @@
 //! explicit [`LatticeError::UnsupportedFormula`] values rather than silently
 //! breaking downstream math.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
 
 use calamine::{Data, Reader, Xlsx};
@@ -108,38 +108,51 @@ pub fn import_sheet(bytes: &[u8], sheet_name: &str) -> Result<ImportedSheet, Imp
         }
     }
 
+    // Cache the data range's non-empty values by absolute (row, col). Note that
+    // a formula cell with no cached computed value (an empty `<v/>`) may fall
+    // outside the data range's bounding box, so formula cells are walked
+    // separately below rather than solely via `range.rows()`.
     let (dsr, dsc) = range.start().unwrap_or((0, 0));
-    let mut sheet = ImportedSheet::default();
-
+    let mut data_values: BTreeMap<(usize, usize), CellValue> = BTreeMap::new();
     for (i, row) in range.rows().enumerate() {
         for (j, cell) in row.iter().enumerate() {
-            // Absolute (row, col) in the sheet for this data cell.
             let abs = (dsr as usize + i, dsc as usize + j);
-            let id = CellId::from_rc(abs.1 as u64, abs.0 as u64);
-            let cached = map_cell(cell);
-
-            // If Excel stored a formula for this cell, translate it into LES and
-            // carry it in `formulas`. Cells whose formula LES cannot represent are
-            // surfaced as an explicit `UnsupportedFormula` error instead.
-            let value = match formulas_by_cell.get(&abs) {
-                Some(formula) => match translate_excel_to_les(formula) {
-                    Some(les) => {
-                        sheet.formulas.insert(id, les);
-                        // Keep any cached computed value; otherwise leave the cell
-                        // empty (the formula is recorded separately).
-                        if cached.is_empty() {
-                            continue;
-                        }
-                        cached
-                    }
-                    None => CellValue::Error(LatticeError::unsupported(format!("={formula}"))),
-                },
-                None => cached,
-            };
-
+            let value = map_cell(cell);
             if !value.is_empty() {
-                sheet.cells.insert(id, value);
+                data_values.insert(abs, value);
             }
+        }
+    }
+
+    let mut sheet = ImportedSheet::default();
+    let mut coords: BTreeSet<(usize, usize)> = data_values.keys().copied().collect();
+    coords.extend(formulas_by_cell.keys().copied());
+
+    for abs in coords {
+        let id = CellId::from_rc(abs.1 as u64, abs.0 as u64);
+        let cached = data_values.get(&abs).cloned().unwrap_or(CellValue::Empty);
+
+        // If Excel stored a formula for this cell, translate it into LES and
+        // carry it in `formulas`. Cells whose formula LES cannot represent are
+        // surfaced as an explicit `UnsupportedFormula` error instead.
+        let value = match formulas_by_cell.get(&abs) {
+            Some(formula) => match translate_excel_to_les(formula) {
+                Some(les) => {
+                    sheet.formulas.insert(id, les);
+                    // Keep any cached computed value; otherwise leave the cell
+                    // empty (the formula is recorded separately).
+                    if cached.is_empty() {
+                        continue;
+                    }
+                    cached
+                }
+                None => CellValue::Error(LatticeError::unsupported(format!("={formula}"))),
+            },
+            None => cached,
+        };
+
+        if !value.is_empty() {
+            sheet.cells.insert(id, value);
         }
     }
 
@@ -170,7 +183,7 @@ fn iso_to_date(s: &str) -> Option<f64> {
     let d: u32 = parts.next()?.parse().ok()?;
     let mut serial = serial_from_ymd(y, m, d);
     // Optional time component after a 'T' or space separator.
-    if let Some(idx) = s[date_part.len()..].find(|c| c == 'T' || c == ' ') {
+    if let Some(idx) = s[date_part.len()..].find(['T', ' ']) {
         let time = &s[date_part.len() + idx + 1..];
         let mut tp = time.split(':');
         if let (Some(hs), Some(ms), Some(ss)) = (tp.next(), tp.next(), tp.next()) {
@@ -287,7 +300,10 @@ fn read_cellref(chars: &[char], i: usize) -> Option<(usize, String)> {
     if after_letters == start || after_dollar == j {
         return None;
     }
-    let letters: String = chars[start..after_letters].iter().collect::<String>().to_uppercase();
+    let letters: String = chars[start..after_letters]
+        .iter()
+        .collect::<String>()
+        .to_uppercase();
     let digits: String = chars[after_dollar..j].iter().collect();
     Some((j, format!("{letters}{digits}")))
 }
@@ -330,7 +346,10 @@ mod tests {
 
     #[test]
     fn iso_date_parsing() {
-        assert_eq!(iso_to_date("2020-03-15").unwrap(), serial_from_ymd(2020, 3, 15));
+        assert_eq!(
+            iso_to_date("2020-03-15").unwrap(),
+            serial_from_ymd(2020, 3, 15)
+        );
         let noon = iso_to_date("2020-03-15T06:00:00").unwrap();
         assert!((noon - (serial_from_ymd(2020, 3, 15) + 0.25)).abs() < 1e-9);
         assert!(iso_to_date("not-a-date").is_none());
