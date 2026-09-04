@@ -22,11 +22,11 @@ use alloc::vec::Vec;
 use nom::branch::alt;
 use nom::bytes::complete::tag;
 use nom::character::complete::{alphanumeric1, anychar, char, digit1, multispace0, one_of};
-use nom::combinator::{map, not, opt, recognize, value};
+use nom::combinator::{all_consuming, map, not, opt, recognize, value};
 use nom::error::{Error as NomError, ErrorKind};
-use nom::multi::many1;
-use nom::sequence::{delimited, preceded, terminated, tuple};
-use nom::IResult;
+use nom::multi::{many1, separated_list0, separated_list1};
+use nom::sequence::{delimited, preceded, terminated};
+use nom::{IResult, Parser};
 
 use tpt_lattice_core::{CellId, LatticeError};
 
@@ -55,14 +55,14 @@ pub fn parse_expr(input: &str) -> Result<Expr, LatticeError> {
 }
 
 fn all_consumed(input: &str) -> Result<Formula, ()> {
-    match nom::combinator::all_consuming(ws(p_expr))(input) {
+    match all_consuming(ws(p_expr)).parse(input) {
         Ok((_, expr)) => Ok(Formula { body: expr }),
         Err(_) => Err(()),
     }
 }
 
 fn all_consumed_expr(input: &str) -> Result<Expr, ()> {
-    match nom::combinator::all_consuming(ws(p_expr))(input) {
+    match all_consuming(ws(p_expr)).parse(input) {
         Ok((_, expr)) => Ok(expr),
         Err(_) => Err(()),
     }
@@ -71,11 +71,11 @@ fn all_consumed_expr(input: &str) -> Result<Expr, ()> {
 /// Wrap a parser to ignore surrounding whitespace.
 fn ws<'a, F, O>(mut f: F) -> impl FnMut(&'a str) -> P<'a, O>
 where
-    F: FnMut(&'a str) -> P<'a, O>,
+    F: Parser<&'a str, Output = O, Error = NomError<&'a str>>,
 {
     move |input: &'a str| {
         let (i, _) = multispace0(input)?;
-        let (i, o) = f(i)?;
+        let (i, o) = f.parse(i)?;
         let (i, _) = multispace0(i)?;
         Ok((i, o))
     }
@@ -90,11 +90,12 @@ fn fail<'a, O>(input: &'a str, _msg: &'static str) -> P<'a, O> {
 // ---------------------------------------------------------------------------
 
 fn p_number(input: &str) -> P<'_, Expr> {
-    let (rest, s) = recognize(tuple((
+    let (rest, s) = recognize((
         digit1,
         opt(preceded(char('.'), digit1)),
-        opt(tuple((one_of("eE"), opt(one_of("+-")), digit1))),
-    )))(input)?;
+        opt((one_of("eE"), opt(one_of("+-")), digit1)),
+    ))
+    .parse(input)?;
     match s.parse::<f64>() {
         Ok(n) => Ok((rest, Expr::Literal(Literal::Number(n)))),
         Err(_) => fail(input, "invalid number literal"),
@@ -109,7 +110,7 @@ fn p_string(input: &str) -> P<'_, Expr> {
             return Ok((rest, Expr::Literal(Literal::Text(out))));
         }
         if let Ok((rest, c)) =
-            preceded(char('\\'), one_of::<&str, &str, NomError<&str>>("\"\\nrt"))(i)
+            preceded(char('\\'), one_of::<&str, &str, NomError<&str>>("\"\\nrt")).parse(i)
         {
             let c = match c {
                 'n' => '\n',
@@ -131,7 +132,7 @@ fn p_string(input: &str) -> P<'_, Expr> {
 }
 
 fn ident(input: &str) -> P<'_, String> {
-    if let Ok((rest, s)) = recognize(tuple((alpha, alphanumeric1)))(input) {
+    if let Ok((rest, s)) = recognize((alpha, alphanumeric1)).parse(input) {
         return Ok((rest, s.to_string()));
     }
     // single-letter identifier (no trailing alphanumeric)
@@ -176,12 +177,13 @@ fn p_atom_ident(input: &str) -> P<'_, Expr> {
 /// Parse an A1 cell reference with optional `$` absolute markers: `$A$1`, `A$1`,
 /// `$A1`, or `A1`. Returns [`Expr::CellRef`] with the absolute flags recorded.
 fn p_cellref(input: &str) -> P<'_, Expr> {
-    let (rest, abs_col) = opt(tag("$"))(input)?;
+    let (rest, abs_col) = opt(tag("$")).parse(input)?;
     let abs_col = abs_col.is_some();
     let (rest, col) = recognize(many1(one_of(
         "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
-    )))(rest)?;
-    let (rest, abs_row) = opt(tag("$"))(rest)?;
+    )))
+    .parse(rest)?;
+    let (rest, abs_row) = opt(tag("$")).parse(rest)?;
     let abs_row = abs_row.is_some();
     let (rest, row) = digit1(rest)?;
     let a1 = format!(
@@ -207,13 +209,13 @@ fn p_cellref(input: &str) -> P<'_, Expr> {
 }
 
 fn p_paren(input: &str) -> P<'_, Expr> {
-    delimited(ws(char('(')), ws(p_expr), ws(char(')')))(input)
+    delimited(ws(char('(')), ws(p_expr), ws(char(')'))).parse(input)
 }
 
 fn p_atom(input: &str) -> P<'_, Expr> {
     // Optional leading `Sheet!` qualifier for cross-sheet references.
-    let (input, sheet) = opt(p_sheet)(input)?;
-    let (input, base) = alt((p_number, p_string, p_paren, p_atom_ident))(input)?;
+    let (input, sheet) = opt(p_sheet).parse(input)?;
+    let (input, base) = alt((p_number, p_string, p_paren, p_atom_ident)).parse(input)?;
     let base = match base {
         Expr::CellRef(mut c) => {
             c.sheet = sheet;
@@ -248,41 +250,41 @@ fn p_sheet(input: &str) -> P<'_, String> {
 fn p_arm(input: &str) -> P<'_, MatchArm> {
     alt((
         map(
-            tuple((
+            (
                 ws(tag("Ok")),
                 char('('),
                 ident,
                 char(')'),
                 ws(tag("=>")),
                 ws(p_expr),
-            )),
+            ),
             |(_, _, name, _, _, body)| MatchArm {
                 pattern: MatchPattern::Ok(name),
                 body,
             },
         ),
         map(
-            tuple((
+            (
                 ws(tag("Err")),
                 char('('),
                 ident,
                 char(')'),
                 ws(tag("=>")),
                 ws(p_expr),
-            )),
+            ),
             |(_, _, name, _, _, body)| MatchArm {
                 pattern: MatchPattern::Err(name),
                 body,
             },
         ),
-        map(
-            tuple((ws(tag("_")), ws(tag("=>")), ws(p_expr))),
-            |(_, _, body)| MatchArm {
+        map((ws(tag("_")), ws(tag("=>")), ws(p_expr)), |(_, _, body)| {
+            MatchArm {
                 pattern: MatchPattern::Wildcard,
                 body,
-            },
-        ),
-    ))(input)
+            }
+        }),
+    ))
+    .parse(input)
 }
 
 fn p_match_call(input: &str) -> P<'_, Expr> {
@@ -290,7 +292,7 @@ fn p_match_call(input: &str) -> P<'_, Expr> {
     let mut arms: Vec<MatchArm> = Vec::new();
     if let Ok((i2, _)) = ws(char(','))(i) {
         i = i2;
-        let (i3, a) = nom::multi::separated_list1(ws(char(',')), ws(p_arm))(i)?;
+        let (i3, a) = separated_list1(ws(char(',')), ws(p_arm)).parse(i)?;
         arms.extend(a);
         i = i3;
     }
@@ -319,10 +321,8 @@ fn p_postfix(input: &str) -> P<'_, Expr> {
                 continue;
             }
         }
-        let (rest2, args) = terminated(
-            nom::multi::separated_list0(ws(char(',')), ws(p_expr)),
-            ws(char(')')),
-        )(rest)?;
+        let (rest2, args) =
+            terminated(separated_list0(ws(char(',')), ws(p_expr)), ws(char(')'))).parse(rest)?;
         match base {
             Expr::Name(n) => {
                 let up = n.to_uppercase();
@@ -397,7 +397,8 @@ fn p_unary(input: &str) -> P<'_, Expr> {
             },
         ),
         p_power,
-    ))(input)
+    ))
+    .parse(input)
 }
 
 // ---------------------------------------------------------------------------
