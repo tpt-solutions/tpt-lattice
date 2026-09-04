@@ -26,3 +26,9 @@ updates:
     labels:
       - "dependencies"
       - "frontend"
+    ignore:
+      # typescript-eslint (a direct dependency) only supports TypeScript
+      # <6.1.0 as of its latest release, so bumping typescript to 7.x makes
+      # `npm ci` fail with an ERESOLVE peer-dependency conflict. Bump this
+      # once typescript-eslint adds TS 7 support.
+      - dependency-name: "typescript"
