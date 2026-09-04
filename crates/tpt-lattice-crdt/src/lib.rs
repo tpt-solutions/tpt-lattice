@@ -261,7 +261,7 @@ impl CrdtStore {
 
     /// Author an `InsertRow` op with a fresh ULID and apply it locally.
     pub fn insert_row(&mut self, after: Option<Ulid>) -> (Ulid, Op) {
-        let id = Ulid::new();
+        let id = Ulid::generate();
         let clock = self.clock.tick(self.actor);
         let op = Op::InsertRow {
             id,
@@ -275,7 +275,7 @@ impl CrdtStore {
 
     /// Author an `InsertColumn` op with a fresh ULID and apply it locally.
     pub fn insert_column(&mut self, after: Option<Ulid>) -> (Ulid, Op) {
-        let id = Ulid::new();
+        let id = Ulid::generate();
         let clock = self.clock.tick(self.actor);
         let op = Op::InsertColumn {
             id,

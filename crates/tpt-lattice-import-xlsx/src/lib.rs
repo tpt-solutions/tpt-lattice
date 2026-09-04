@@ -5,7 +5,7 @@
 //! explicit [`LatticeError::UnsupportedFormula`] values rather than silently
 //! breaking downstream math.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
 
 use calamine::{Data, Reader, Xlsx};
@@ -108,38 +108,51 @@ pub fn import_sheet(bytes: &[u8], sheet_name: &str) -> Result<ImportedSheet, Imp
         }
     }
 
+    // Cache the data range's non-empty values by absolute (row, col). Note that
+    // a formula cell with no cached computed value (an empty `<v/>`) may fall
+    // outside the data range's bounding box, so formula cells are walked
+    // separately below rather than solely via `range.rows()`.
     let (dsr, dsc) = range.start().unwrap_or((0, 0));
-    let mut sheet = ImportedSheet::default();
-
+    let mut data_values: BTreeMap<(usize, usize), CellValue> = BTreeMap::new();
     for (i, row) in range.rows().enumerate() {
         for (j, cell) in row.iter().enumerate() {
-            // Absolute (row, col) in the sheet for this data cell.
             let abs = (dsr as usize + i, dsc as usize + j);
-            let id = CellId::from_rc(abs.1 as u64, abs.0 as u64);
-            let cached = map_cell(cell);
-
-            // If Excel stored a formula for this cell, translate it into LES and
-            // carry it in `formulas`. Cells whose formula LES cannot represent are
-            // surfaced as an explicit `UnsupportedFormula` error instead.
-            let value = match formulas_by_cell.get(&abs) {
-                Some(formula) => match translate_excel_to_les(formula) {
-                    Some(les) => {
-                        sheet.formulas.insert(id, les);
-                        // Keep any cached computed value; otherwise leave the cell
-                        // empty (the formula is recorded separately).
-                        if cached.is_empty() {
-                            continue;
-                        }
-                        cached
-                    }
-                    None => CellValue::Error(LatticeError::unsupported(format!("={formula}"))),
-                },
-                None => cached,
-            };
-
+            let value = map_cell(cell);
             if !value.is_empty() {
-                sheet.cells.insert(id, value);
+                data_values.insert(abs, value);
             }
+        }
+    }
+
+    let mut sheet = ImportedSheet::default();
+    let mut coords: BTreeSet<(usize, usize)> = data_values.keys().copied().collect();
+    coords.extend(formulas_by_cell.keys().copied());
+
+    for abs in coords {
+        let id = CellId::from_rc(abs.1 as u64, abs.0 as u64);
+        let cached = data_values.get(&abs).cloned().unwrap_or(CellValue::Empty);
+
+        // If Excel stored a formula for this cell, translate it into LES and
+        // carry it in `formulas`. Cells whose formula LES cannot represent are
+        // surfaced as an explicit `UnsupportedFormula` error instead.
+        let value = match formulas_by_cell.get(&abs) {
+            Some(formula) => match translate_excel_to_les(formula) {
+                Some(les) => {
+                    sheet.formulas.insert(id, les);
+                    // Keep any cached computed value; otherwise leave the cell
+                    // empty (the formula is recorded separately).
+                    if cached.is_empty() {
+                        continue;
+                    }
+                    cached
+                }
+                None => CellValue::Error(LatticeError::unsupported(format!("={formula}"))),
+            },
+            None => cached,
+        };
+
+        if !value.is_empty() {
+            sheet.cells.insert(id, value);
         }
     }
 
