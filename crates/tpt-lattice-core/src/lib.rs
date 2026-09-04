@@ -26,7 +26,9 @@ mod error;
 mod grid;
 
 pub use cell_id::{CellId, ColumnParseError};
-pub use cell_value::CellValue;
+pub use cell_value::{
+    format_serial_date, serial_from_ymd, ymd_from_serial, CellValue, EXCEL_EPOCH_OFFSET,
+};
 pub use error::LatticeError;
 pub use grid::GridState;
 

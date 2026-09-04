@@ -1,7 +1,10 @@
 //! The strictly-typed value that may be stored in a cell.
 
+use alloc::format;
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec::Vec;
+use libm::{floor, fabs, round};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -145,7 +148,8 @@ impl core::fmt::Display for CellValue {
 /// Excel epoch offset: `serial 0` corresponds to 1899-12-30, and the Unix epoch
 /// (1970-01-01) is serial `25569`. Used to translate between civil dates and the
 /// serial numbers stored in [`CellValue::Date`].
-const EXCEL_EPOCH_OFFSET: i64 = 25569;
+/// Days between the Excel epoch (1899-12-30) and the Unix epoch (1970-01-01).
+pub const EXCEL_EPOCH_OFFSET: i64 = 25569;
 
 /// Convert a day count since the Unix epoch into a `(year, month, day)` civil date
 /// (Howard Hinnant's `civil_from_days` algorithm).
@@ -167,7 +171,7 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
 fn days_from_civil(y: i32, m: u32, d: u32) -> i64 {
     let y = if m <= 2 { y - 1 } else { y } as i64;
     let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = (y - era * 400) as i64; // [0,399]
+    let yoe = y - era * 400; // [0,399]
     let m = m as i64;
     let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d as i64 - 1; // [0,365]
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0,146096]
@@ -179,14 +183,14 @@ pub fn format_serial_date(serial: f64) -> String {
     if !serial.is_finite() {
         return "#NUM!".to_string();
     }
-    let days = serial.floor() as i64;
-    let unix_days = days - EXCEL_EPOCH_OFFSET;
-    let (y, m, d) = civil_from_days(unix_days);
-    let frac = serial - serial.floor();
-    if frac.abs() < 1e-9 {
+        let days = floor(serial) as i64;
+        let unix_days = days - EXCEL_EPOCH_OFFSET;
+        let (y, m, d) = civil_from_days(unix_days);
+        let frac = serial - floor(serial);
+        if fabs(frac) < 1e-9 {
         return format!("{y:04}-{m:02}-{d:02}");
     }
-    let secs = (frac * 86_400.0).round() as i64;
+        let secs = round(frac * 86_400.0) as i64;
     let hh = (secs / 3600) % 24;
     let mm = (secs / 60) % 60;
     let ss = secs % 60;
@@ -196,6 +200,14 @@ pub fn format_serial_date(serial: f64) -> String {
 /// Build an Excel serial number from a `(year, month, day)` civil date.
 pub fn serial_from_ymd(y: i32, m: u32, d: u32) -> f64 {
     (days_from_civil(y, m, d) + EXCEL_EPOCH_OFFSET) as f64
+}
+
+/// Decompose an Excel serial number into a `(year, month, day)` civil date.
+/// The time-of-day fraction is ignored.
+pub fn ymd_from_serial(serial: f64) -> (i32, u32, u32) {
+    let days = floor(serial) as i64;
+    let unix_days = days - EXCEL_EPOCH_OFFSET;
+    civil_from_days(unix_days)
 }
 
 #[cfg(test)]

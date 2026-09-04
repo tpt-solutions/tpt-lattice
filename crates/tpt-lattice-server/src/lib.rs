@@ -34,6 +34,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -45,9 +46,28 @@ use axum::routing::get;
 use axum::Router;
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
+use serde::Serialize;
 use tokio::sync::broadcast;
 
 use tpt_lattice_crdt::Op;
+
+/// A presence-cursor message relayed between peers: `{"type":"cursor", cell,
+/// actor}`. These are ephemeral (not persisted, not part of the op CRDT).
+#[derive(Debug, Deserialize)]
+struct CursorMessage {
+    #[serde(rename = "type")]
+    kind: String,
+    cell: String,
+    actor: u32,
+}
+
+/// Sent to a client immediately after connect so it knows its presence id.
+#[derive(Debug, Serialize)]
+struct WelcomeMessage {
+    #[serde(rename = "type")]
+    kind: String,
+    id: u32,
+}
 
 /// Shared broadcast hub for op JSON payloads within a single room.
 pub type Hub = Arc<broadcast::Sender<String>>;
@@ -63,6 +83,8 @@ pub struct Room {
     /// Retained op history, replayed to new connections (bounded; the full log
     /// lives on disk when a persistence dir is configured).
     pub history: Arc<Mutex<Vec<String>>>,
+    /// Monotonic counter for assigning each connection a presence id.
+    pub next_id: Arc<AtomicU32>,
 }
 
 /// Server-wide configuration controlling access control and limits.
@@ -209,6 +231,7 @@ fn load_or_create_room(state: &AppState, name: &str) -> Room {
         name: name.to_string(),
         hub: Arc::new(tx),
         history: Arc::new(Mutex::new(history)),
+        next_id: Arc::new(AtomicU32::new(1)),
     };
     state.rooms.lock().unwrap().insert(name.to_string(), room.clone());
     room
@@ -241,6 +264,18 @@ async fn handle_socket(socket: WebSocket, room: Room, state: AppState) {
     let (mut sender, mut receiver) = socket.split();
     let mut rx = room.hub.subscribe();
 
+    // Assign this connection a presence id and tell it (so the client can colour
+    // its own cursor and ignore its own echoed cursor).
+    let id = room.next_id.fetch_add(1, Ordering::SeqCst);
+    if let Ok(welcome) = serde_json::to_string(&WelcomeMessage {
+        kind: "welcome".to_string(),
+        id,
+    }) {
+        if sender.send(Message::Text(welcome)).await.is_err() {
+            return;
+        }
+    }
+
     // Catch-up: replay this room's retained history so a late joiner /
     // reconnecting peer converges.
     {
@@ -261,8 +296,10 @@ async fn handle_socket(socket: WebSocket, room: Room, state: AppState) {
         }
     });
 
-    // Receive ops from this client, validate them, persist, bound the in-memory
-    // history, and re-broadcast.
+    // Receive messages from this client: either CRDT ops (persisted + rebroadcast)
+    // or presence cursors (ephemeral, relayed only). Per-connection sends are
+    // error-checked (the `.catch()` in spirit) so a bad/disconnected client
+    // cannot crash the server.
     let cfg = state.config.clone();
     let room_name = room.name.clone();
     let hub2 = room.hub.clone();
@@ -287,6 +324,19 @@ async fn handle_socket(socket: WebSocket, room: Room, state: AppState) {
             rate_count += 1;
             if cfg.rate_limit_per_sec > 0 && rate_count > cfg.rate_limit_per_sec {
                 break;
+            }
+
+            // Presence cursors: relay to every other connected client, but never
+            // persist or treat as CRDT ops. Skip malformed ones (empty cell).
+            if let Ok(cur) = serde_json::from_str::<CursorMessage>(&text) {
+                if cur.kind == "cursor" && !cur.cell.is_empty() {
+                    // `actor` identifies the sender; we keep it in the payload so
+                    // peers can colour/ignore it. `send` failing (no receivers)
+                    // is harmless and must not crash this connection.
+                    let _ = cur.actor;
+                    let _ = hub2.send(text);
+                }
+                continue;
             }
 
             // Validate it deserializes as a real Op; drop garbage payloads so

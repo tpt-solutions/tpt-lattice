@@ -1,27 +1,51 @@
-import { createSignal } from "solid-js";
+import { createSignal, type Accessor } from "solid-js";
+import type { CellStyle } from "../types";
 
 export interface ToolbarProps {
   onEvaluate: () => void;
   onReset: () => void;
+  onUndo: () => void;
+  onRedo: () => void;
+  onFind: () => void;
+  onHelp: () => void;
+  onOpen: (file: File) => void;
+  onToggleBold: () => void;
+  onToggleItalic: () => void;
+  onNumFmt: (fmt: NonNullable<CellStyle["numFmt"]>) => void;
+  onAlign: (align: NonNullable<CellStyle["align"]>) => void;
+  /** The style applied to the active cell, for reflecting toggle state. */
+  activeStyle: Accessor<CellStyle>;
+  /** Freeze leading rows/columns at the active cell. */
+  onFreeze: () => void;
+  /** Clear any active freeze panes. */
+  onUnfreeze: () => void;
+  /** Whether freeze panes are currently active. */
+  frozen: boolean;
+  /** Open the dependency-graph visualizer. */
+  onGraph: () => void;
+  /** Open the version-history browser. */
+  onHistory: () => void;
+  /** Open the Git-style diff/version view. */
+  onDiff: () => void;
+  /** Open the what-if branching (fork/merge) dialog. */
+  onBranch: () => void;
+  /** Open the sandboxed UDF plugin loader. */
+  onPlugins: () => void;
 }
 
-/**
- * Stub formatting controls (bold/italic/number-format/alignment) plus working
- * Evaluate/Reset actions. The formatting buttons are visual-only for now — they
- * do not yet affect evaluation.
- */
-export function Toolbar(props: ToolbarProps) {
-  const [bold, setBold] = createSignal(false);
-  const [italic, setItalic] = createSignal(false);
+const btn = (active: boolean): Record<string, string> => ({
+  padding: "4px 10px",
+  border: "1px solid #e5e7eb",
+  "border-radius": "4px",
+  cursor: "pointer",
+  background: active ? "#dbeafe" : "#fff",
+  "font-weight": active ? "700" : "400",
+});
 
-  const btn = (active: boolean) => ({
-    padding: "4px 10px",
-    border: "1px solid #e5e7eb",
-    "border-radius": "4px",
-    cursor: "pointer",
-    background: active ? "#dbeafe" : "#fff",
-    "font-weight": active ? "700" : "400",
-  });
+export function Toolbar(props: ToolbarProps) {
+  const [fmt, setFmt] = createSignal<NonNullable<CellStyle["numFmt"]>>("general");
+  const style = () => props.activeStyle();
+  let fileInput!: HTMLInputElement;
 
   return (
     <div
@@ -32,17 +56,88 @@ export function Toolbar(props: ToolbarProps) {
         "border-bottom": "1px solid #e5e7eb",
         background: "#f9fafb",
         "align-items": "center",
+        "flex-wrap": "wrap",
       }}
     >
-      <button style={btn(bold())} onClick={() => setBold((b) => !b)}>
+      <button style={btn(false)} onClick={props.onUndo} title="Undo (Ctrl+Z)">
+        ↶
+      </button>
+      <button style={btn(false)} onClick={props.onRedo} title="Redo (Ctrl+Shift+Z)">
+        ↷
+      </button>
+      <span style={{ width: "1px", height: "20px", background: "#e5e7eb" }} />
+      <button style={btn(!!style().bold)} onClick={props.onToggleBold} title="Bold">
         <b>B</b>
       </button>
-      <button style={btn(italic())} onClick={() => setItalic((i) => !i)}>
+      <button style={btn(!!style().italic)} onClick={props.onToggleItalic} title="Italic">
         <i>I</i>
       </button>
-      <button style={btn(false)}># ,0.00</button>
-      <button style={btn(false)}>≡</button>
+      <select
+        value={fmt()}
+        onChange={(e) => {
+          const v = e.currentTarget.value as NonNullable<CellStyle["numFmt"]>;
+          setFmt(v);
+          props.onNumFmt(v);
+        }}
+        style={{ padding: "4px 6px", border: "1px solid #e5e7eb", "border-radius": "4px" }}
+        title="Number format"
+      >
+        <option value="general">General</option>
+        <option value="number">#,##0.00</option>
+        <option value="percent">0%</option>
+        <option value="currency">$#,##0.00</option>
+      </select>
+      <button style={btn(style().align === "left")} onClick={() => props.onAlign("left")} title="Align left">
+        ≡
+      </button>
+      <button style={btn(style().align === "center")} onClick={() => props.onAlign("center")} title="Align center">
+        ≣
+      </button>
+      <button style={btn(style().align === "right")} onClick={() => props.onAlign("right")} title="Align right">
+        ⇥
+      </button>
       <div style={{ flex: "1 1 auto" }} />
+      <button style={btn(props.frozen)} onClick={props.onFreeze} title="Freeze rows/columns above and left of the active cell">
+        Freeze
+      </button>
+      <button style={btn(false)} onClick={props.onUnfreeze} title="Unfreeze panes" disabled={!props.frozen}>
+        Unfreeze
+      </button>
+      <button style={btn(false)} onClick={props.onGraph} title="Show the dependency graph">
+        Graph
+      </button>
+      <button style={btn(false)} onClick={props.onHistory} title="Browse version history">
+        History
+      </button>
+      <button style={btn(false)} onClick={props.onDiff} title="Git-style diff between saved versions">
+        Diff
+      </button>
+      <button style={btn(false)} onClick={props.onBranch} title="Fork a sheet and merge back">
+        Branch
+      </button>
+      <button style={btn(false)} onClick={props.onPlugins} title="Load sandboxed user-defined functions">
+        Plugins
+      </button>
+      <button style={btn(false)} onClick={props.onFind} title="Find / Replace">
+        Find
+      </button>
+      <button style={btn(false)} onClick={props.onHelp} title="LES formula reference">
+        Help
+      </button>
+      <button style={btn(false)} onClick={() => fileInput.click()} title="Open a .json grid">
+        Open
+      </button>
+      <input
+        ref={fileInput}
+        type="file"
+        accept="application/json,.json"
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const f = e.currentTarget.files?.[0];
+          if (f) props.onOpen(f);
+          e.currentTarget.value = "";
+        }}
+      />
       <button style={btn(false)} onClick={props.onEvaluate}>
         Evaluate
       </button>

@@ -8,6 +8,8 @@ export interface SyncClientOptions {
   engine: EngineClient;
   /** Called after a *remote* op is applied, so the UI can refresh. */
   onRemoteOp?: (op: Op) => void;
+  /** Called when a remote peer moves its cursor: `(actor, cell)`. */
+  onRemoteCursor?: (actor: number, cell: string) => void;
   /** Replica actor id. If omitted, a random one is generated. */
   actor?: number;
 }
@@ -37,6 +39,9 @@ export class SyncClient {
   private pending: Op[] = [];
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private closed = false;
+  /** Presence id assigned by the server on connect (falls back to `actor`). */
+  private presenceId?: number;
+  private remoteCursorCbs: ((actor: number, cell: string) => void)[] = [];
 
   constructor(private opts: SyncClientOptions) {
     this.actor = opts.actor ?? randomActor();
@@ -70,15 +75,23 @@ export class SyncClient {
   private async replay() {
     const ops = await this.log.all();
     for (const op of ops) this.rawSend(op);
-    for (const op of this.pending) this.rawSend(op);
+    // Snapshot pending before draining: `rawSend` may re-queue an op (e.g. if the
+    // socket is not yet OPEN), and iterating the live array while it mutates would
+    // otherwise loop forever.
+    const pending = this.pending;
     this.pending = [];
+    for (const op of pending) this.rawSend(op);
   }
 
-  private rawSend(op: Op) {
+  private rawSend(msg: unknown) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(op));
+      this.ws.send(JSON.stringify(msg));
     } else {
-      this.pending.push(op);
+      // Cursor/non-op messages are ephemeral; only real ops are re-queued.
+      if (typeof msg === "object" && msg !== null && "type" in msg && (msg as any).type === "cursor") {
+        return;
+      }
+      this.pending.push(msg as Op);
     }
   }
 
@@ -94,8 +107,37 @@ export class SyncClient {
     }
   }
 
-    private onMessage(e: MessageEvent) {
-    const op = JSON.parse(e.data as string) as Op;
+  /** Register a callback for remote presence-cursor updates. */
+  onRemoteCursor(cb: (actor: number, cell: string) => void) {
+    this.remoteCursorCbs.push(cb);
+  }
+
+  /** Broadcast the local user's active cell to peers. */
+  sendCursor(cell: string) {
+    const actor = this.presenceId ?? this.actor;
+    this.rawSend({ type: "cursor", cell, actor });
+  }
+
+  private onMessage(e: MessageEvent) {
+    let msg: unknown;
+    try {
+      msg = JSON.parse(e.data as string);
+    } catch {
+      return;
+    }
+    const m = msg as { type?: string; actor?: number; cell?: string; id?: number };
+    if (m && m.type === "welcome" && typeof m.id === "number") {
+      this.presenceId = m.id;
+      return;
+    }
+    if (m && m.type === "cursor" && typeof m.actor === "number" && typeof m.cell === "string") {
+      // Ignore our own echoed cursor (the server broadcasts to all peers).
+      if (m.actor !== (this.presenceId ?? this.actor)) {
+        for (const cb of this.remoteCursorCbs) cb(m.actor, m.cell);
+      }
+      return;
+    }
+    const op = msg as Op;
     // Ignore our own ops echoed back by the server — they are already applied.
     if (opActor(op) === this.actor) return;
     // A malformed remote op must not produce an unhandled promise rejection on

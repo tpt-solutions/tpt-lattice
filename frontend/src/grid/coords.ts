@@ -28,3 +28,15 @@ export function parseA1(a1: string): { col: number; row: number } | null {
   if (!m) return null;
   return { col: parseColumnLabel(m[1]), row: parseInt(m[2], 10) - 1 };
 }
+
+/**
+ * Decode a packed `CellId` bitfield (the `cell` field of a `SetCell`/`DeleteCell`
+ * op) into `(col, row)` coordinates. `CellId` packs a 20-bit column above a 44-bit
+ * row; JS bitwise ops are 32-bit only, so we use arithmetic on the full `Number`.
+ */
+export function cellBitsToRC(bits: number): { col: number; row: number } {
+  const ROW_BITS = 44;
+  const col = Math.floor(bits / 2 ** ROW_BITS);
+  const row = bits % 2 ** ROW_BITS;
+  return { col, row };
+}

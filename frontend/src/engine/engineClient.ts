@@ -1,4 +1,4 @@
-import type { CellValue, Op, Request, Response } from "../types";
+import type { CellValue, DiffRow, MergeConflict, Op, Request, Response } from "../types";
 
 type Pending = (r: { ok: boolean; response?: Response; error?: string }) => void;
 
@@ -79,6 +79,69 @@ export class EngineClient {
     return r.type === "Outbox" ? r.ops : [];
   }
 
+  /** Low-level passthrough for any `Request` (used by newer engine features). */
+  request(req: Request): Promise<Response> {
+    return this.send(req);
+  }
+
+  /** Return every materialized `(A1, value)` pair (for find/replace). */
+  async listCells(): Promise<{ cell: string; value: CellValue }[]> {
+    const r = await this.send({ type: "ListCells" });
+    return r.type === "Cells" ? r.cells : [];
+  }
+
+  /** Create a new (empty) sheet. */
+  newSheet(name: string) {
+    return this.send({ type: "NewSheet", name });
+  }
+
+  /** Delete a sheet by name (refused when it is the last sheet). */
+  deleteSheet(name: string) {
+    return this.send({ type: "DeleteSheet", name });
+  }
+
+  /** Rename a sheet (`from` -> `to`). */
+  renameSheet(from: string, to: string) {
+    return this.send({ type: "RenameSheet", from, to });
+  }
+
+  /** Make `name` the active sheet for subsequent requests. */
+  selectSheet(name: string) {
+    return this.send({ type: "SelectSheet", name });
+  }
+
+  /** List sheet names and the active sheet. */
+  async listSheets(): Promise<{ sheets: string[]; active: string }> {
+    const r = await this.send({ type: "ListSheets" });
+    return r.type === "Sheets" ? { sheets: r.sheets, active: r.active } : { sheets: [], active: "" };
+  }
+
+  /** Return the active sheet's dependency graph (DAG) as A1 nodes + edges. */
+  async getGraph(): Promise<{ nodes: string[]; edges: [string, string][] }> {
+    const r = await this.send({ type: "GetGraph" });
+    return r.type === "Graph" ? { nodes: r.nodes, edges: r.edges } : { nodes: [], edges: [] };
+  }
+
+  /** Insert a row after `index` (or at the top when `index` is null). */
+  insertRow(index: number | null) {
+    return this.send({ type: "InsertRow", index });
+  }
+
+  /** Delete the row currently at `index`. */
+  deleteRow(index: number) {
+    return this.send({ type: "DeleteRow", index });
+  }
+
+  /** Insert a column after `index` (or at the left edge when null). */
+  insertColumn(index: number | null) {
+    return this.send({ type: "InsertColumn", index });
+  }
+
+  /** Delete the column currently at `index`. */
+  deleteColumn(index: number) {
+    return this.send({ type: "DeleteColumn", index });
+  }
+
   evaluate() {
     return this.send({ type: "Evaluate" });
   }
@@ -89,5 +152,57 @@ export class EngineClient {
 
   reset() {
     return this.send({ type: "Reset" });
+  }
+
+  /** Snapshot the active sheet under a named version. */
+  saveVersion(label: string) {
+    return this.send({ type: "SaveVersion", label });
+  }
+
+  /** List saved versions as `[index, label, sheet]` tuples. */
+  async listVersions(): Promise<[number, string, string][]> {
+    const r = await this.send({ type: "ListVersions" });
+    return r.type === "Versions" ? r.entries : [];
+  }
+
+  /** Diff two saved versions (left = before, right = after). */
+  async diff(left: number, right: number): Promise<DiffRow[]> {
+    const r = await this.send({ type: "Diff", left, right });
+    return r.type === "Diff" ? r.rows : [];
+  }
+
+  /** Fork the active sheet into a new branch sheet. */
+  fork(name: string) {
+    return this.send({ type: "Fork", name });
+  }
+
+  /** Merge a branch sheet back into the sheet it was forked from. */
+  async mergeBranch(
+    name: string,
+  ): Promise<{ applied: number; conflicts: MergeConflict[] } | null> {
+    const r = await this.send({ type: "MergeBranch", name });
+    return r.type === "Merge" ? { applied: r.applied, conflicts: r.conflicts } : null;
+  }
+
+  /** List branch sheets as `[name, parent]` pairs. */
+  async listBranches(): Promise<[string, string][]> {
+    const r = await this.send({ type: "ListBranches" });
+    return r.type === "Branches" ? r.entries : [];
+  }
+
+  /** Load a sandboxed user-defined-function plugin from wasm bytes. */
+  registerUdf(name: string, bytes: number[]) {
+    return this.send({ type: "RegisterUDF", name, bytes });
+  }
+
+  /** Remove a previously loaded UDF plugin. */
+  unregisterUdf(name: string) {
+    return this.send({ type: "UnregisterUDF", name });
+  }
+
+  /** List the names of currently loaded UDF plugins. */
+  async listUdfs(): Promise<string[]> {
+    const r = await this.send({ type: "ListUDFs" });
+    return r.type === "UDFs" ? r.names : [];
   }
 }

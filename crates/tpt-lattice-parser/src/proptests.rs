@@ -19,6 +19,7 @@ fn cellref_strategy() -> impl Strategy<Value = Expr> {
             a1,
             abs_col: false,
             abs_row: false,
+            sheet: None,
         })
     })
 }

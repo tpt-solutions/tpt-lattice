@@ -1,6 +1,7 @@
 //! Abstract Syntax Tree for the Lattice Expression Syntax (LES).
 
 use alloc::boxed::Box;
+use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -92,6 +93,10 @@ pub enum Literal {
 /// `abs_col`/`abs_row` record whether the column/row were dollar-prefixed
 /// (`$A$1`, `A$1`, `$A1`); they are metadata for copy/fill semantics and do not
 /// affect evaluation (a reference always resolves to the same [`CellId`]).
+///
+/// `sheet` is the optional leading `Sheet!` qualifier for cross-sheet references
+/// (e.g. `Sheet2!A1`). When `None`, the reference resolves within the current
+/// sheet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct CellRef {
@@ -103,6 +108,18 @@ pub struct CellRef {
     pub abs_col: bool,
     /// Whether the row part was absolute (`A$1`).
     pub abs_row: bool,
+    /// Optional leading sheet qualifier (e.g. `"Sheet2"` in `Sheet2!A1`).
+    pub sheet: Option<String>,
+}
+
+impl CellRef {
+    /// A re-parseable A1 rendering, including the `Sheet!` qualifier when present.
+    pub fn display_a1(&self) -> String {
+        match &self.sheet {
+            Some(s) => format!("{}!{}", s, self.a1),
+            None => self.a1.clone(),
+        }
+    }
 }
 
 /// Unary operators.
@@ -249,7 +266,7 @@ impl core::fmt::Display for Expr {
                 Literal::Boolean(b) => write!(f, "{b}"),
                 Literal::Error(e) => write!(f, "#{e}"),
             },
-            Expr::CellRef(c) => f.write_str(&c.a1),
+            Expr::CellRef(c) => f.write_str(&c.display_a1()),
             Expr::Name(n) => f.write_str(n),
             Expr::Unary { op, expr } => write!(f, "({}{})", op.symbol(), expr),
             Expr::Binary { op, left, right } => {
@@ -265,7 +282,7 @@ impl core::fmt::Display for Expr {
                 }
                 write!(f, ")")
             }
-            Expr::Range { start, end } => write!(f, "RANGE({}, {})", start.a1, end.a1),
+            Expr::Range { start, end } => write!(f, "RANGE({}, {})", start.display_a1(), end.display_a1()),
             Expr::Match { scrutinee, arms } => {
                 write!(f, "MATCH({scrutinee}")?;
                 for arm in arms {

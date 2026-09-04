@@ -21,6 +21,7 @@ tpt-lattice-crdt = { workspace = true }
 wasm-bindgen = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+js-sys = "0.3"
 
 # `ulid` pulls in `rand` -> `getrandom`, which needs the `wasm_js` backend to
 # compile for the browser wasm target. This is enabled only for wasm builds so

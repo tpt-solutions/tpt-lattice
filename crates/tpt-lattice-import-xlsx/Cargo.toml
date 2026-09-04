@@ -15,5 +15,5 @@ tpt-lattice-core = { workspace = true, features = ["serde"] }
 calamine = { workspace = true }
 # Direct xlsx (OOXML zip) access for merged cells and per-cell styles, which
 # `calamine` does not surface. Both are already in the lockfile via calamine.
-zip = "0.6"
-quick-xml = "0.31"
+zip = "8.6"
+quick-xml = "0.42"

@@ -38,10 +38,20 @@ fn imports_numbers_text_and_booleans() {
 }
 
 #[test]
-fn formulas_become_unsupported_error() {
+fn formulas_are_translated_to_les() {
     let sheet = import_first_sheet(include_bytes!("../tests/fixtures/sample.xlsx")).unwrap();
-    let d1 = sheet.cells.get(&CellId::from_a1("D1")).expect("D1 present");
-    assert_eq!(d1, &CellValue::Error(LatticeError::unsupported("=A1+A2")));
+    // The fixture's D1 is `=A1+A2`; it should be translated into LES and carried in
+    // `formulas` rather than flagged as an opaque error.
+    assert_eq!(
+        sheet.formulas.get(&CellId::from_a1("D1")),
+        Some(&"=A1+A2".to_string()),
+        "D1 formula should be translated to LES"
+    );
+    // The original error value should no longer be present.
+    assert!(!matches!(
+        sheet.cells.get(&CellId::from_a1("D1")),
+        Some(CellValue::Error(LatticeError::UnsupportedFormula(_)))
+    ));
 }
 
 #[test]

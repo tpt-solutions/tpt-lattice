@@ -1,0 +1,35 @@
+{
+  "name": "Project Tracker",
+  "cells": {
+    "A1": { "Text": "Project Tracker" },
+    "A3": { "Text": "Task" },
+    "B3": { "Text": "Owner" },
+    "C3": { "Text": "Estimate (h)" },
+    "D3": { "Text": "Spent (h)" },
+    "E3": { "Text": "Remaining (h)" },
+    "A4": { "Text": "Design" },
+    "B4": { "Text": "Ada" },
+    "C4": { "Number": 40 },
+    "D4": { "Number": 35 },
+    "A5": { "Text": "Build" },
+    "B5": { "Text": "Linus" },
+    "C5": { "Number": 120 },
+    "D5": { "Number": 90 },
+    "A6": { "Text": "Test" },
+    "B6": { "Text": "Grace" },
+    "C6": { "Number": 30 },
+    "D6": { "Number": 10 },
+    "A8": { "Text": "Total estimate" },
+    "B8": { "Text": "Total spent" },
+    "C8": { "Number": 190 },
+    "D8": { "Number": 135 },
+    "A9": { "Text": "Total remaining" },
+    "C9": { "Number": 55 }
+  },
+  "formulas": {
+    "E4": "=C4 - D4",
+    "E5": "=C5 - D5",
+    "E6": "=C6 - D6",
+    "C9": "=C4 + C5 + C6 - (D4 + D5 + D6)"
+  }
+}

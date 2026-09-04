@@ -55,6 +55,14 @@ pub struct CellStyle {
     pub horizontal_align: Option<HorizontalAlign>,
     pub vertical_align: Option<VerticalAlign>,
     pub number_format: Option<String>,
+    /// Foreground fill color as an ARGB hex string (e.g. `FF00FF00`), if any.
+    pub fill_color: Option<String>,
+    /// Font (text) color as an ARGB hex string, if any.
+    pub font_color: Option<String>,
+    /// Font face name (e.g. `Calibri`), if present.
+    pub font_name: Option<String>,
+    /// Whether the cell has a (non-default) border applied.
+    pub border: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -273,12 +281,16 @@ fn parse_merge_ref(v: &[u8]) -> Option<MergedRegion> {
 struct FontStyle {
     bold: bool,
     italic: bool,
+    color: Option<String>,
+    name: Option<String>,
 }
 
 #[derive(Default)]
 struct Xf {
     font_id: u32,
     num_fmt_id: u32,
+    fill_id: u32,
+    border_id: u32,
     horizontal: Option<HorizontalAlign>,
     vertical: Option<VerticalAlign>,
 }
@@ -287,6 +299,8 @@ struct StyleTable {
     fonts: Vec<FontStyle>,
     cell_xfs: Vec<Xf>,
     num_fmts: HashMap<u32, String>,
+    /// ARGB fill color per fill index (index 0/1 are the default none/gray125).
+    fills: Vec<Option<String>>,
 }
 
 fn parse_styles(xml: &str) -> StyleTable {
@@ -302,6 +316,10 @@ fn parse_styles(xml: &str) -> StyleTable {
     let mut cur_numfmt: Option<(u32, String)> = None;
     let mut in_numfmts = false;
 
+    let mut fills: Vec<Option<String>> = Vec::new();
+    let mut cur_fill: Option<Option<String>> = None;
+    let mut in_fills = false;
+
     let mut reader = Reader::from_str(xml);
     reader.trim_text(true);
     let mut buf = Vec::new();
@@ -316,6 +334,20 @@ fn parse_styles(xml: &str) -> StyleTable {
                     b"font" if in_fonts => cur_font = Some(FontStyle::default()),
                     b"b" if cur_font.is_some() => cur_font.as_mut().unwrap().bold = true,
                     b"i" if cur_font.is_some() => cur_font.as_mut().unwrap().italic = true,
+                    b"color" if cur_font.is_some() => {
+                        for a in e.attributes().flatten() {
+                            if a.key.as_ref() == b"rgb" {
+                                cur_font.as_mut().unwrap().color = str_from(&a.value).map(str::to_string);
+                            }
+                        }
+                    }
+                    b"name" if cur_font.is_some() => {
+                        for a in e.attributes().flatten() {
+                            if a.key.as_ref() == b"val" {
+                                cur_font.as_mut().unwrap().name = str_from(&a.value).map(str::to_string);
+                            }
+                        }
+                    }
 
                     b"cellXfs" => in_cellxfs = true,
                     b"xf" if in_cellxfs => {
@@ -324,6 +356,8 @@ fn parse_styles(xml: &str) -> StyleTable {
                             match a.key.as_ref() {
                                 b"fontId" => xf.font_id = parse_u32(&a.value).unwrap_or(0),
                                 b"numFmtId" => xf.num_fmt_id = parse_u32(&a.value).unwrap_or(0),
+                                b"fillId" => xf.fill_id = parse_u32(&a.value).unwrap_or(0),
+                                b"borderId" => xf.border_id = parse_u32(&a.value).unwrap_or(0),
                                 _ => {}
                             }
                         }
@@ -340,6 +374,23 @@ fn parse_styles(xml: &str) -> StyleTable {
                         }
                     }
 
+                    b"fills" => in_fills = true,
+                    b"fill" if in_fills => {
+                        if is_empty {
+                            fills.push(None);
+                        } else {
+                            cur_fill = Some(None);
+                        }
+                    }
+                    b"fgColor" if in_fills => {
+                        for a in e.attributes().flatten() {
+                            if a.key.as_ref() == b"rgb" {
+                                if let Some(f) = cur_fill.as_mut() {
+                                    *f = str_from(&a.value).map(str::to_string);
+                                }
+                            }
+                        }
+                    }
                     b"numFmts" => in_numfmts = true,
                     b"numFmt" if in_numfmts => {
                         let mut id = None;
@@ -397,6 +448,12 @@ fn parse_styles(xml: &str) -> StyleTable {
                             num_fmts.insert(id, code);
                         }
                     }
+                    b"fills" => in_fills = false,
+                    b"fill" if in_fills => {
+                        if let Some(f) = cur_fill.take() {
+                            fills.push(f);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -405,7 +462,7 @@ fn parse_styles(xml: &str) -> StyleTable {
         }
         buf.clear();
     }
-    StyleTable { fonts, cell_xfs, num_fmts }
+    StyleTable { fonts, cell_xfs, num_fmts, fills }
 }
 
 fn build_style(table: &StyleTable, idx: u32) -> Option<CellStyle> {
@@ -420,12 +477,17 @@ fn build_style(table: &StyleTable, idx: u32) -> Option<CellStyle> {
             .cloned()
             .or_else(|| builtin_numfmt(xf.num_fmt_id))
     };
+    let fill_color = table.fills.get(xf.fill_id as usize).and_then(|f| f.clone());
     Some(CellStyle {
         bold: font.map(|f| f.bold).unwrap_or(false),
         italic: font.map(|f| f.italic).unwrap_or(false),
         horizontal_align: xf.horizontal,
         vertical_align: xf.vertical,
         number_format,
+        fill_color,
+        font_color: font.and_then(|f| f.color.clone()),
+        font_name: font.and_then(|f| f.name.clone()),
+        border: xf.border_id != 0,
     })
 }
 
@@ -545,5 +607,38 @@ mod tests {
         assert_eq!(mr.top_left, CellId::from_a1("A1"));
         assert_eq!(mr.bottom_right, CellId::from_a1("C3"));
         assert!(parse_merge_ref(b"A1").is_none());
+    }
+
+    #[test]
+    fn parses_extended_styles() {
+        const STYLE_XML: &str = r#"<?xml version="1.0"?>
+        <styleSheet>
+          <numFmts count="1"><numFmt numFmtId="164" formatCode="0.00"/></numFmts>
+          <fonts count="2">
+            <font><b/><color rgb="FFFF0000"/><name val="Consolas"/></font>
+            <font/>
+          </fonts>
+          <fills count="3">
+            <fill><patternFill patternType="none"/></fill>
+            <fill><patternFill patternType="gray125"/></fill>
+            <fill><patternFill patternType="solid"><fgColor rgb="FF00FF00"/></patternFill></fill>
+          </fills>
+          <borders count="2"><border><left/></border><border/></borders>
+          <cellXfs count="2">
+            <xf fontId="0" numFmtId="164" fillId="2" borderId="1"/>
+            <xf fontId="1" numFmtId="0" fillId="0" borderId="0"/>
+          </cellXfs>
+        </styleSheet>"#;
+        let table = parse_styles(STYLE_XML);
+        assert_eq!(table.fills.len(), 3);
+        assert_eq!(table.fills[2], Some("FF00FF00".to_string()));
+        let s = build_style(&table, 0).unwrap();
+        assert!(s.bold);
+        assert_eq!(s.font_color, Some("FFFF0000".to_string()));
+        assert_eq!(s.font_name, Some("Consolas".to_string()));
+        assert_eq!(s.fill_color, Some("FF00FF00".to_string()));
+        assert_eq!(s.number_format, Some("0.00".to_string()));
+        assert!(s.border);
+        assert!(!build_style(&table, 1).unwrap().border);
     }
 }

@@ -1,7 +1,15 @@
-import type { CellValue, LatticeError } from "../types";
-import { isError } from "../types";
-import { columnLabel } from "./coords";
-import { COL_W, HEADER_H, HEADER_W, ROW_H, type Range } from "./metrics";
+import type { CellValue, CellStyle, LatticeError } from "../types";
+import { isError, errorCode, formatSerialDate } from "../types";
+import { columnLabel, parseA1 } from "./coords";
+import {
+  colWidth,
+  rowHeight,
+  colX,
+  rowY,
+  HEADER_H,
+  HEADER_W,
+  type Range,
+} from "./metrics";
 
 export interface RenderState {
   ctx: CanvasRenderingContext2D;
@@ -12,9 +20,22 @@ export interface RenderState {
   scrollY: number;
   range: Range;
   cells: Map<string, CellValue>; // keyed by "col,row"
+  styles: Map<string, CellStyle>;
   active: { col: number; row: number };
   selection: Range;
   editing: boolean;
+  /** Cells changed by a remote peer since the last local edit (conflict UI). */
+  remote?: Set<string>;
+  /** Cells currently matching an active find query. */
+  find?: Set<string>;
+  /** Remote presence cursors to overlay: `{ actor, cell, color }[]`. */
+  cursors?: { actor: number; cell: string; color: string }[];
+  widths: number[];
+  heights: number[];
+  /** Number of leading columns that stay fixed while scrolling (0 = none). */
+  freezeCols?: number;
+  /** Number of leading rows that stay fixed while scrolling (0 = none). */
+  freezeRows?: number;
 }
 
 const COLORS = {
@@ -27,6 +48,9 @@ const COLORS = {
   selectionBorder: "#2563eb",
   errorBg: "#fee2e2",
   errorText: "#b91c1c",
+  remoteBg: "rgba(245, 158, 11, 0.28)",
+  remoteBorder: "#d97706",
+  findBg: "rgba(250, 204, 21, 0.45)",
 };
 
 function a1Key(col: number, row: number) {
@@ -34,34 +58,67 @@ function a1Key(col: number, row: number) {
 }
 
 function errorToText(e: LatticeError): string {
-  if (typeof e === "string") return e;
-  const key = Object.keys(e)[0] as keyof typeof e;
-  const p = (e as Record<string, unknown>)[key];
-  if (typeof p === "string") return `${key}: ${p}`;
-  if (p && typeof p === "object") return `${key}: ${JSON.stringify(p)}`;
-  return key;
+  return errorCode(e);
 }
 
-function valueToText(v: CellValue): string {
+/** Format a numeric value per the cell's number format. */
+function formatNumber(n: number, style: CellStyle | undefined): string {
+  const fmt = style?.numFmt ?? "general";
+  switch (fmt) {
+    case "number":
+      return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    case "percent":
+      return `${(n * 100).toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
+    case "currency":
+      return n.toLocaleString(undefined, {
+        style: "currency",
+        currency: "USD",
+        maximumFractionDigits: 2,
+      });
+    default:
+      return String(n);
+  }
+}
+
+function valueToText(v: CellValue, style: CellStyle | undefined): string {
   if (v === "Empty") return "";
   if (typeof v === "object") {
-    if ("Number" in v) return String(v.Number);
+    if ("Number" in v) return formatNumber(v.Number, style);
     if ("Text" in v) return v.Text;
     if ("Boolean" in v) return String(v.Boolean);
-    if ("Error" in v) return `#${errorToText(v.Error)}`;
+    if ("Date" in v) return formatSerialDate(v.Date);
+    if ("List" in v) return v.List.map((x) => valueToText(x, style)).join(", ");
+    if ("Error" in v) return errorToText(v.Error);
   }
   return "";
 }
 
-/** Draw the full grid into the canvas for the current viewport. */
+export interface ClipRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * Draw the full grid into the canvas for the current viewport, honouring frozen
+ * leading rows/columns. The viewport is split into four clipped zones (top-left,
+ * top-right, bottom-left, bottom-right) so frozen cells stay pinned while the
+ * scrollable zones move with the scroll offset.
+ */
 export function drawGrid(s: RenderState) {
   const { ctx, width, height, dpr, scrollX, scrollY, range } = s;
 
-  // Reset transform and clear in device pixels.
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = COLORS.bg;
   ctx.fillRect(0, 0, width, height);
+
+  const freezeCols = s.freezeCols ?? 0;
+  const freezeRows = s.freezeRows ?? 0;
+  // Screen-space edge of the frozen strip (content space for col/row 0 is HEADER_W/HEADER_H).
+  const freezeEdgeX = freezeCols > 0 ? colX(freezeCols, s.widths) : HEADER_W;
+  const freezeEdgeY = freezeRows > 0 ? rowY(freezeRows, s.heights) : HEADER_H;
 
   const inSel = (c: number, r: number) =>
     c >= s.selection.col0 &&
@@ -69,56 +126,136 @@ export function drawGrid(s: RenderState) {
     r >= s.selection.row0 &&
     r <= s.selection.row1;
 
-  // --- cells ---
+  const drawCol1 = range.col1;
+  const drawRow1 = range.row1;
+
   ctx.textBaseline = "middle";
-  ctx.font = "13px ui-monospace, SFMono-Regular, Menlo, monospace";
 
-  for (let r = range.row0; r <= range.row1; r++) {
-    const y = HEADER_H + r * ROW_H - scrollY;
-    if (y + ROW_H < HEADER_H || y > height) continue;
-    for (let c = range.col0; c <= range.col1; c++) {
-      const x = HEADER_W + c * COL_W - scrollX;
-      if (x + COL_W < HEADER_W || x > width) continue;
+  // Paint one zone. `frozenCol`/`frozenRow` decide whether an axis is pinned
+  // (no scroll offset) or scrolls with the viewport.
+  const paint = (
+    c0: number,
+    c1: number,
+    r0: number,
+    r1: number,
+    frozenCol: boolean,
+    frozenRow: boolean,
+    clip: ClipRect,
+  ) => {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(clip.x, clip.y, clip.w, clip.h);
+    ctx.clip();
 
-      const v = s.cells.get(a1Key(c, r)) ?? "Empty";
-      const selected = inSel(c, r);
-      const errored = isError(v);
+    for (let r = r0; r <= r1; r++) {
+      const y = frozenRow ? rowY(r, s.heights) : rowY(r, s.heights) - scrollY;
+      const h = rowHeight(r, s.heights);
+      if (y + h < clip.y || y > clip.y + clip.h) continue;
+      for (let c = c0; c <= c1; c++) {
+        const x = frozenCol ? colX(c, s.widths) : colX(c, s.widths) - scrollX;
+        const w = colWidth(c, s.widths);
+        if (x + w < clip.x || x > clip.x + clip.w) continue;
 
-      // background
-      if (errored) ctx.fillStyle = COLORS.errorBg;
-      else if (selected && !s.editing) ctx.fillStyle = COLORS.selection;
-      else ctx.fillStyle = COLORS.bg;
-      ctx.fillRect(x, y, COL_W, ROW_H);
+        const k = a1Key(c, r);
+        const v = s.cells.get(k) ?? "Empty";
+        const style = s.styles.get(k);
+        const selected = inSel(c, r) && !s.editing;
+        const errored = isError(v);
+        const remote = s.remote?.has(k);
+        const found = s.find?.has(k);
 
-      // content
-      const text = valueToText(v);
-      if (text) {
-        ctx.fillStyle = errored ? COLORS.errorText : COLORS.text;
-        ctx.textAlign = typeof v === "object" && "Number" in v ? "right" : "left";
-        const padX = 6;
-        const tx = ctx.textAlign === "right" ? x + COL_W - padX : x + padX;
-        ctx.fillText(text, tx, y + ROW_H / 2);
+        // background (layered: selection < find < remote < error)
+        if (errored) ctx.fillStyle = COLORS.errorBg;
+        else if (remote) ctx.fillStyle = COLORS.remoteBg;
+        else if (found) ctx.fillStyle = COLORS.findBg;
+        else if (selected) ctx.fillStyle = COLORS.selection;
+        else ctx.fillStyle = COLORS.bg;
+        ctx.fillRect(x, y, w, h);
+
+        const text = valueToText(v, style);
+        // Non-color error cue: a warning glyph so errors are not conveyed by
+        // the red background alone (accessibility: color-blind users).
+        if (errored) drawErrorIcon(ctx, x + 4, y + h / 2);
+        if (text) {
+          ctx.fillStyle = errored ? COLORS.errorText : COLORS.text;
+          ctx.font = `${style?.italic ? "italic " : ""}${style?.bold ? "700" : "400"} 13px ui-monospace, SFMono-Regular, Menlo, monospace`;
+          const align = style?.align ?? (typeof v === "object" && "Number" in v ? "right" : "left");
+          ctx.textAlign = align;
+          const padX = 6 + (errored ? 14 : 0);
+          const tx =
+            align === "right"
+              ? x + w - 6
+              : align === "center"
+                ? x + w / 2
+                : x + padX;
+          ctx.fillText(text, tx, y + h / 2);
+        }
+
+        // remote-change border
+        if (remote) {
+          ctx.strokeStyle = COLORS.remoteBorder;
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+        }
+
+        if (c === s.active.col && r === s.active.row && !s.editing) {
+          ctx.strokeStyle = COLORS.selectionBorder;
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+        }
       }
     }
-  }
 
-  // --- vertical + horizontal grid lines ---
-  ctx.strokeStyle = COLORS.gridLine;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let c = range.col0; c <= range.col1 + 1; c++) {
-    const x = Math.round(HEADER_W + c * COL_W - scrollX) + 0.5;
-    if (x < HEADER_W - 1) continue;
-    ctx.moveTo(x, HEADER_H);
-    ctx.lineTo(x, height);
+    // grid lines (confined to the zone)
+    ctx.strokeStyle = COLORS.gridLine;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let c = c0; c <= c1 + 1; c++) {
+      const x = Math.round(frozenCol ? colX(c, s.widths) : colX(c, s.widths) - scrollX) + 0.5;
+      ctx.moveTo(x, clip.y);
+      ctx.lineTo(x, clip.y + clip.h);
+    }
+    for (let r = r0; r <= r1 + 1; r++) {
+      const y = Math.round(frozenRow ? rowY(r, s.heights) : rowY(r, s.heights) - scrollY) + 0.5;
+      ctx.moveTo(clip.x, y);
+      ctx.lineTo(clip.x + clip.w, y);
+    }
+    ctx.stroke();
+
+    ctx.restore();
+  };
+
+  // Four zones; frozen zones are skipped when nothing is frozen.
+  if (freezeCols > 0 && freezeRows > 0) {
+    paint(0, freezeCols - 1, 0, freezeRows - 1, true, true, {
+      x: HEADER_W,
+      y: HEADER_H,
+      w: freezeEdgeX - HEADER_W,
+      h: freezeEdgeY - HEADER_H,
+    });
   }
-  for (let r = range.row0; r <= range.row1 + 1; r++) {
-    const y = Math.round(HEADER_H + r * ROW_H - scrollY) + 0.5;
-    if (y < HEADER_H - 1) continue;
-    ctx.moveTo(HEADER_W, y);
-    ctx.lineTo(width, y);
+  if (freezeRows > 0) {
+    paint(freezeCols, drawCol1, 0, freezeRows - 1, false, true, {
+      x: freezeEdgeX,
+      y: HEADER_H,
+      w: width - freezeEdgeX,
+      h: freezeEdgeY - HEADER_H,
+    });
   }
-  ctx.stroke();
+  if (freezeCols > 0) {
+    paint(0, freezeCols - 1, freezeRows, drawRow1, true, false, {
+      x: HEADER_W,
+      y: freezeEdgeY,
+      w: freezeEdgeX - HEADER_W,
+      h: height - freezeEdgeY,
+    });
+  }
+  paint(freezeCols, drawCol1, freezeRows, drawRow1, false, false, {
+    x: freezeEdgeX,
+    y: freezeEdgeY,
+    w: width - freezeEdgeX,
+    h: height - freezeEdgeY,
+  });
 
   // --- header gutters ---
   ctx.fillStyle = COLORS.headerBg;
@@ -129,30 +266,144 @@ export function drawGrid(s: RenderState) {
   ctx.font = "12px system-ui, sans-serif";
   ctx.textBaseline = "middle";
   ctx.textAlign = "center";
-  // column headers
-  for (let c = range.col0; c <= range.col1; c++) {
-    const x = HEADER_W + c * COL_W - scrollX + COL_W / 2;
-    if (x < HEADER_W) continue;
+
+  // Column headers: frozen slice pinned, scrollable slice under the top-right zone.
+  if (freezeCols > 0) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(HEADER_W, 0, freezeEdgeX - HEADER_W, HEADER_H);
+    ctx.clip();
+    for (let c = 0; c < freezeCols; c++) {
+      ctx.fillText(columnLabel(c), colX(c, s.widths) + colWidth(c, s.widths) / 2, HEADER_H / 2);
+    }
+    ctx.restore();
+  }
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(freezeEdgeX, 0, width - freezeEdgeX, HEADER_H);
+  ctx.clip();
+  for (let c = freezeCols; c <= drawCol1; c++) {
+    const x = colX(c, s.widths) - scrollX + colWidth(c, s.widths) / 2;
+    if (x < freezeEdgeX) continue;
     ctx.fillText(columnLabel(c), x, HEADER_H / 2);
   }
-  // row headers
-  ctx.textBaseline = "middle";
-  for (let r = range.row0; r <= range.row1; r++) {
-    const y = HEADER_H + r * ROW_H - scrollY + ROW_H / 2;
-    if (y < HEADER_H) continue;
+  ctx.restore();
+
+  // Row headers: frozen slice pinned, scrollable slice under the bottom-left zone.
+  if (freezeRows > 0) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, HEADER_H, HEADER_W, freezeEdgeY - HEADER_H);
+    ctx.clip();
+    for (let r = 0; r < freezeRows; r++) {
+      ctx.fillText(String(r + 1), HEADER_W / 2, rowY(r, s.heights) + rowHeight(r, s.heights) / 2);
+    }
+    ctx.restore();
+  }
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, freezeEdgeY, HEADER_W, height - freezeEdgeY);
+  ctx.clip();
+  for (let r = freezeRows; r <= drawRow1; r++) {
+    const y = rowY(r, s.heights) - scrollY + rowHeight(r, s.heights) / 2;
+    if (y < freezeEdgeY) continue;
     ctx.fillText(String(r + 1), HEADER_W / 2, y);
   }
+  ctx.restore();
 
   // corner
   ctx.fillStyle = COLORS.headerBg;
   ctx.fillRect(0, 0, HEADER_W, HEADER_H);
 
-  // --- active-cell border ---
-  if (!s.editing) {
-    const ax = HEADER_W + s.active.col * COL_W - scrollX;
-    const ay = HEADER_H + s.active.row * ROW_H - scrollY;
-    ctx.strokeStyle = COLORS.selectionBorder;
+  // freeze divider lines
+  if (freezeCols > 0) {
+    ctx.strokeStyle = "#9ca3af";
     ctx.lineWidth = 2;
-    ctx.strokeRect(ax + 1, ay + 1, COL_W - 2, ROW_H - 2);
+    ctx.beginPath();
+    ctx.moveTo(freezeEdgeX, HEADER_H);
+    ctx.lineTo(freezeEdgeX, height);
+    ctx.stroke();
   }
+  if (freezeRows > 0) {
+    ctx.strokeStyle = "#9ca3af";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(HEADER_W, freezeEdgeY);
+    ctx.lineTo(width, freezeEdgeY);
+    ctx.stroke();
+  }
+
+  // --- remote presence cursors ---------------------------------------------
+  if (s.cursors && s.cursors.length) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(HEADER_W, HEADER_H, width - HEADER_W, height - HEADER_H);
+    ctx.clip();
+    for (const cur of s.cursors) {
+      const p = parseA1(cur.cell);
+      if (!p) continue;
+      const frozenCol = p.col < freezeCols;
+      const frozenRow = p.row < freezeRows;
+      const x = frozenCol ? colX(p.col, s.widths) : colX(p.col, s.widths) - scrollX;
+      const y = frozenRow ? rowY(p.row, s.heights) : rowY(p.row, s.heights) - scrollY;
+      if (x < HEADER_W || y < HEADER_H || x > width || y > height) continue;
+      const h = rowHeight(p.row, s.heights);
+      drawCursor(ctx, x, y, h, cur.color, String(cur.actor));
+    }
+    ctx.restore();
+  }
+}
+
+/** Draw a small colored triangle at a cell's top-left corner plus the actor label. */
+function drawCursor(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  h: number,
+  color: string,
+  label: string,
+) {
+  const s = Math.max(8, Math.min(12, h));
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x + s, y);
+  ctx.lineTo(x, y + s);
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.strokeStyle = "#fff";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.font = "bold 10px system-ui, sans-serif";
+  const tagW = Math.max(16, ctx.measureText(label).width + 8);
+  const tagX = x + s;
+  const tagY = Math.min(y + s, y + h - 14);
+  ctx.fillStyle = color;
+  ctx.fillRect(tagX, tagY, tagW, 14);
+  ctx.fillStyle = "#fff";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(label, tagX + tagW / 2, tagY + 7);
+  ctx.restore();
+}
+
+/** Draw a small warning triangle at (cx, cy) as a non-color error cue. */
+function drawErrorIcon(ctx: CanvasRenderingContext2D, cx: number, cy: number) {
+  const s = 9;
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - s / 2);
+  ctx.lineTo(cx + s / 2, cy + s / 2);
+  ctx.lineTo(cx - s / 2, cy + s / 2);
+  ctx.closePath();
+  ctx.fillStyle = "#b91c1c";
+  ctx.fill();
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "bold 8px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("!", cx, cy + 1);
+  ctx.restore();
 }

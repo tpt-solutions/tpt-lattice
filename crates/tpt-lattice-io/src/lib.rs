@@ -19,23 +19,49 @@ use std::collections::BTreeMap;
 
 use tpt_lattice_core::{CellId, CellValue};
 
+/// The `format_version` written into every serialized snapshot. Bump this when
+/// the on-disk shape of [`SerializableGrid`] changes so older files can be
+/// detected and migrated/validated on read.
+pub const FORMAT_VERSION: u8 = 1;
+
+fn default_format_version() -> u8 {
+    FORMAT_VERSION
+}
+
 /// A serializable snapshot of grid cell values (keyed by packed `CellId` bits).
 ///
-/// Formulas are intentionally *not* stored here; the evaluator is the source of
-/// truth for formulas, while [`SerializableGrid`] captures computed/materialized
-/// values for transport and persistence.
+/// Persists both computed/materialized values (for transport and persistence) and,
+/// alongside them, the source LES formulas keyed by the same cell id. On reload a
+/// consumer can re-apply the formulas to recover a live sheet instead of dead
+/// values. A `format_version` field supports forward/backward compatibility as
+/// [`tpt_lattice_core::CellValue`]/`CellId` evolve.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SerializableGrid {
+    /// Schema version of this snapshot. Defaults to [`FORMAT_VERSION`] on read so
+    /// files written before this field existed still deserialize.
+    #[serde(default = "default_format_version")]
+    version: u8,
     /// Sorted `(cell id bits, value)` pairs for deterministic serialization.
     cells: BTreeMap<u64, CellValue>,
+    /// Source LES formulas keyed by cell id bits (companion to `cells`). A cell
+    /// may have a formula, a value, or both.
+    #[serde(default)]
+    formulas: BTreeMap<u64, String>,
 }
 
 impl SerializableGrid {
     /// Create an empty grid snapshot.
     pub fn new() -> Self {
         SerializableGrid {
+            version: FORMAT_VERSION,
             cells: BTreeMap::new(),
+            formulas: BTreeMap::new(),
         }
+    }
+
+    /// The schema version this snapshot was written with.
+    pub fn version(&self) -> u8 {
+        self.version
     }
 
     /// Number of stored cells.
@@ -43,9 +69,9 @@ impl SerializableGrid {
         self.cells.len()
     }
 
-    /// Whether the snapshot is empty.
+    /// Whether the snapshot has no cells (formulas still count as content).
     pub fn is_empty(&self) -> bool {
-        self.cells.is_empty()
+        self.cells.is_empty() && self.formulas.is_empty()
     }
 
     /// Insert or overwrite a cell value.
@@ -63,6 +89,28 @@ impl SerializableGrid {
             .get(&id.to_bits())
             .cloned()
             .unwrap_or(CellValue::Empty)
+    }
+
+    /// Set the LES formula for a cell (companion to [`set`](Self::set)). An empty
+    /// string removes any stored formula.
+    pub fn set_formula(&mut self, id: CellId, formula: &str) {
+        if formula.is_empty() {
+            self.formulas.remove(&id.to_bits());
+        } else {
+            self.formulas.insert(id.to_bits(), formula.to_string());
+        }
+    }
+
+    /// Read the LES formula for a cell, if one is stored.
+    pub fn get_formula(&self, id: CellId) -> Option<&str> {
+        self.formulas.get(&id.to_bits()).map(|s| s.as_str())
+    }
+
+    /// Iterate over `(CellId, formula)` pairs in row-major bit order.
+    pub fn iter_formulas(&self) -> impl Iterator<Item = (CellId, &str)> {
+        self.formulas
+            .iter()
+            .map(|(&bits, f)| (CellId::from_bits(bits), f.as_str()))
     }
 
     /// Iterate over `(CellId, CellValue)` pairs in row-major bit order.
@@ -158,5 +206,30 @@ mod tests {
         let mut g = SerializableGrid::new();
         g.set(CellId::from_a1("A1"), CellValue::Empty);
         assert!(g.is_empty());
+    }
+
+    #[test]
+    fn version_is_recorded_and_roundtrips() {
+        let g = SerializableGrid::new();
+        assert_eq!(g.version(), 1);
+        let bytes = to_msgpack(&g).unwrap();
+        assert_eq!(from_msgpack(&bytes).unwrap().version(), 1);
+    }
+
+    #[test]
+    fn formulas_persist_and_roundtrip() {
+        let mut g = SerializableGrid::new();
+        g.set(CellId::from_a1("A1"), CellValue::Number(21.0));
+        g.set_formula(CellId::from_a1("B1"), "=A1 * 2");
+
+        let bytes = to_msgpack(&g).unwrap();
+        let back = from_msgpack(&bytes).unwrap();
+        assert_eq!(back.get(CellId::from_a1("A1")), CellValue::Number(21.0));
+        assert_eq!(back.get_formula(CellId::from_a1("B1")), Some("=A1 * 2"));
+
+        // Formula without a stored value still makes the snapshot non-empty.
+        let mut g2 = SerializableGrid::new();
+        g2.set_formula(CellId::from_a1("C3"), "=1+1");
+        assert!(!g2.is_empty());
     }
 }

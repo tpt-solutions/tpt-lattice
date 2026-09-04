@@ -34,6 +34,38 @@ pub trait GridState {
     /// bounded coordinate window (which silently drops out-of-window data) nor
     /// loop over millions of empty coordinates.
     fn iter_cells(&self) -> alloc::vec::Vec<(CellId, CellValue)>;
+
+    /// Resolve a cell in another (named) sheet, used by cross-sheet references
+    /// such as `Sheet2!A1`. The default implementation returns `None`, meaning
+    /// the store does not support cross-sheet lookups; stores that do (e.g. the
+    /// evaluator with a registered sheet view) override this.
+    fn get_sheet_cell(&self, _sheet: &str, _id: CellId) -> Option<CellValue> {
+        let _ = _sheet;
+        let _ = _id;
+        None
+    }
+
+    /// Resolve a named range / reusable formula. The default returns `None`
+    /// (the name is not a known range); stores that support named ranges
+    /// override this.
+    fn get_named(&self, _name: &str) -> Option<CellValue> {
+        let _ = _name;
+        None
+    }
+
+    /// Invoke a user-defined (external) function by name, passing already
+    /// evaluated [`CellValue`] arguments. This is the extension point used by
+    /// sandboxed wasm plugins and other host-provided functions.
+    ///
+    /// The default returns `None`, meaning the name is not a known external
+    /// function; the evaluator then reports a `#NAME?` error. Stores that host
+    /// external functions (such as the wasm engine, which bridges to plugins)
+    /// override this.
+    fn call_external(&self, _name: &str, _args: &[CellValue]) -> Option<CellValue> {
+        let _ = _name;
+        let _ = _args;
+        None
+    }
 }
 
 #[cfg(test)]

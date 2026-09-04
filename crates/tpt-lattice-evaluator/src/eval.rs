@@ -2,7 +2,10 @@
 
 use std::collections::HashMap;
 
-use tpt_lattice_core::{format_serial_date, serial_from_ymd, CellId, CellValue, GridState, LatticeError};
+use tpt_lattice_core::{
+    format_serial_date, serial_from_ymd, ymd_from_serial, CellId, CellValue, GridState,
+    LatticeError,
+};
 use tpt_lattice_parser::ast::{BinaryOp, CastKind, Expr, Literal, MatchPattern, UnaryOp};
 
 /// Evaluate a formula expression against `grid`, resolving `MATCH` bindings via
@@ -20,10 +23,24 @@ pub fn eval_expr(
             Literal::Boolean(b) => CellValue::Boolean(*b),
             Literal::Error(e) => CellValue::Error(e.clone()),
         },
-        Expr::CellRef(c) => grid.get_cell(c.id).sanitize(),
+        Expr::CellRef(c) => {
+            if let Some(sheet) = &c.sheet {
+                match grid.get_sheet_cell(sheet, c.id) {
+                    Some(v) => v.sanitize(),
+                    None => CellValue::Error(LatticeError::ref_error(format!(
+                        "no such sheet '{sheet}'"
+                    ))),
+                }
+            } else {
+                grid.get_cell(c.id).sanitize()
+            }
+        }
         Expr::Name(n) => match env.get(n) {
             Some(v) => v.clone(),
-            None => CellValue::Error(LatticeError::name_error(n.clone())),
+            None => match grid.get_named(n) {
+                Some(v) => v,
+                None => CellValue::Error(LatticeError::name_error(n.clone())),
+            },
         },
         Expr::Unary { op, expr } => eval_unary(*op, expr, grid, env),
         Expr::Binary { op, left, right } => eval_binary(*op, left, right, grid, env),
@@ -218,6 +235,8 @@ fn eval_cast(
             },
             CellValue::Boolean(b) => CellValue::Number(if b { 1.0 } else { 0.0 }),
             CellValue::Error(e) => CellValue::Error(e),
+            CellValue::Date(d) => CellValue::Number(d),
+            CellValue::List(_) => CellValue::Error(LatticeError::type_error("Number", "List")),
             CellValue::Empty => CellValue::Error(LatticeError::type_error("Number", "Empty")),
         },
         CastKind::Text => match v {
@@ -225,6 +244,10 @@ fn eval_cast(
             CellValue::Number(n) => CellValue::Text(n.to_string()),
             CellValue::Boolean(b) => CellValue::Text(b.to_string()),
             CellValue::Error(e) => CellValue::Text(format!("#{e}")),
+            CellValue::Date(d) => CellValue::Text(format_serial_date(d)),
+            CellValue::List(items) => {
+                CellValue::Text(items.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", "))
+            }
             CellValue::Empty => CellValue::Text(String::new()),
         },
         CastKind::Boolean => match v {
@@ -237,6 +260,8 @@ fn eval_cast(
                 _ => CellValue::Error(LatticeError::type_error("Boolean", "Text")),
             },
             CellValue::Error(e) => CellValue::Error(e),
+            CellValue::Date(_) => CellValue::Boolean(true),
+            CellValue::List(_) => CellValue::Error(LatticeError::type_error("Boolean", "List")),
             CellValue::Empty => CellValue::Error(LatticeError::type_error("Boolean", "Empty")),
         },
     }
@@ -368,7 +393,24 @@ fn call_function(
         "MODE" => mode_fn(args, grid, env),
         "RANK" => rank_fn(args, grid, env),
         "PERCENTILE" => percentile(args, grid, env),
-        other => CellValue::Error(LatticeError::name_error(other)),
+        // --- Date & time ----------------------------------------------------
+        "DATE" => date_fn(args, grid, env),
+        "TODAY" => today_fn(args),
+        "NOW" => now_fn(args),
+        "YEAR" => year_fn(args, grid, env),
+        "MONTH" => month_fn(args, grid, env),
+        "DAY" => day_fn(args, grid, env),
+        "DATEDIF" => datedif(args, grid, env),
+        other => {
+            // Not a built-in: evaluate every argument, then consult any
+            // registered external (user-defined) function. If none is registered
+            // under `other`, fall back to a `#NAME?` error.
+            let arg_vals: Vec<CellValue> = args.iter().map(|a| eval_expr(a, grid, env)).collect();
+            match grid.call_external(other, &arg_vals) {
+                Some(v) => v.sanitize(),
+                None => CellValue::Error(LatticeError::name_error(other)),
+            }
+        }
     }
 }
 
@@ -557,6 +599,8 @@ fn concat(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellVal
             CellValue::Number(n) => out.push_str(&n.to_string()),
             CellValue::Boolean(b) => out.push_str(&b.to_string()),
             CellValue::Error(e) => return CellValue::Error(e),
+            CellValue::Date(d) => out.push_str(&format_serial_date(d)),
+            CellValue::List(_) => return CellValue::Error(LatticeError::type_error("Text", "List")),
             CellValue::Empty => {}
         }
     }
@@ -670,6 +714,10 @@ fn eval_text(
         CellValue::Number(n) => CellValue::Text(n.to_string()),
         CellValue::Boolean(b) => CellValue::Text(b.to_string()),
         CellValue::Empty => CellValue::Text(String::new()),
+        CellValue::Date(d) => CellValue::Text(format_serial_date(d)),
+        CellValue::List(items) => {
+            CellValue::Text(items.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", "))
+        }
         e @ CellValue::Error(_) => e,
     }
 }
@@ -1294,7 +1342,7 @@ fn xlookup(
 // --- Statistics ----------------------------------------------------------------
 
 fn median(args: &[Expr], grid: &dyn GridState, env: &mut HashMap<String, CellValue>) -> CellValue {
-    match collect_numbers(args, grid, env, false) {
+    match collect_numbers(args, grid, env, true) {
         Ok(mut nums) => {
             if nums.is_empty() {
                 return CellValue::Empty;
@@ -1316,7 +1364,7 @@ fn sample_var(
     grid: &dyn GridState,
     env: &mut HashMap<String, CellValue>,
 ) -> CellValue {
-    match collect_numbers(args, grid, env, false) {
+    match collect_numbers(args, grid, env, true) {
         Ok(nums) => {
             let n = nums.len() as f64;
             if n < 2.0 {
@@ -1342,7 +1390,7 @@ fn mode_fn(
     grid: &dyn GridState,
     env: &mut HashMap<String, CellValue>,
 ) -> CellValue {
-    match collect_numbers(args, grid, env, false) {
+    match collect_numbers(args, grid, env, true) {
         Ok(nums) => {
             if nums.is_empty() {
                 return CellValue::Error(LatticeError::na());
@@ -1440,4 +1488,267 @@ fn percentile(
     }
     let frac = pos - lo as f64;
     CellValue::Number(nums[lo] + (nums[hi] - nums[lo]) * frac)
+}
+
+// --- Date & time -------------------------------------------------------------
+
+fn serial_today() -> f64 {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as f64)
+        .unwrap_or(0.0);
+    let days = (secs / 86_400.0).floor() as i64;
+    (days + tpt_lattice_core::EXCEL_EPOCH_OFFSET) as f64
+}
+
+fn serial_now() -> f64 {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    let days = (secs / 86_400.0).floor() as i64;
+    let frac = secs / 86_400.0 - days as f64;
+    (days + tpt_lattice_core::EXCEL_EPOCH_OFFSET) as f64 + frac
+}
+
+/// Interpret `v` as an Excel date serial (a [`CellValue::Date`] or a plain
+/// number standing in for a serial). Errors and other types are rejected.
+fn as_serial(v: &CellValue) -> Result<f64, CellValue> {
+    match v {
+        CellValue::Date(s) => Ok(*s),
+        CellValue::Number(n) => Ok(*n),
+        CellValue::Error(e) => Err(CellValue::Error(e.clone())),
+        CellValue::Empty => Err(CellValue::Error(LatticeError::type_error(
+            "Date",
+            "Empty",
+        ))),
+        other => Err(CellValue::Error(LatticeError::type_error(
+            "Date",
+            variant_name(other),
+        ))),
+    }
+}
+
+/// Read an integer-valued argument (used by `DATE`, `YEAR`, ...).
+fn eval_int_arg(
+    args: &[Expr],
+    i: usize,
+    grid: &dyn GridState,
+    env: &mut HashMap<String, CellValue>,
+) -> Result<i64, CellValue> {
+    match eval_expr(&args[i], grid, env) {
+        CellValue::Number(n) if n.is_finite() => Ok(n as i64),
+        CellValue::Error(e) => Err(CellValue::Error(e)),
+        other => Err(CellValue::Error(LatticeError::type_error(
+            "Number",
+            variant_name(&other),
+        ))),
+    }
+}
+
+fn date_fn(
+    args: &[Expr],
+    grid: &dyn GridState,
+    env: &mut HashMap<String, CellValue>,
+) -> CellValue {
+    if args.len() != 3 {
+        return count_error("DATE");
+    }
+    let y = match eval_int_arg(args, 0, grid, env) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let m = match eval_int_arg(args, 1, grid, env) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let d = match eval_int_arg(args, 2, grid, env) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    if !(0..=9999).contains(&y) || !(1..=12).contains(&m) || d < 1 {
+        return CellValue::Error(LatticeError::argument_error(
+            "DATE: year/month/day out of range",
+        ));
+    }
+    let days_in_month = days_in_month(y as i32, m as u32);
+    if d as u32 > days_in_month {
+        return CellValue::Error(LatticeError::argument_error(
+            "DATE: day out of range for the given month",
+        ));
+    }
+    CellValue::Date(serial_from_ymd(y as i32, m as u32, d as u32))
+}
+
+fn today_fn(args: &[Expr]) -> CellValue {
+    if !args.is_empty() {
+        return count_error("TODAY");
+    }
+    CellValue::Date(serial_today())
+}
+
+fn now_fn(args: &[Expr]) -> CellValue {
+    if !args.is_empty() {
+        return count_error("NOW");
+    }
+    CellValue::Date(serial_now())
+}
+
+fn year_fn(
+    args: &[Expr],
+    grid: &dyn GridState,
+    env: &mut HashMap<String, CellValue>,
+) -> CellValue {
+    if args.len() != 1 {
+        return count_error("YEAR");
+    }
+    match as_serial(&eval_expr(&args[0], grid, env)) {
+        Ok(s) => {
+            let (y, _, _) = ymd_from_serial(s);
+            CellValue::Number(y as f64)
+        }
+        Err(e) => e,
+    }
+}
+
+fn month_fn(
+    args: &[Expr],
+    grid: &dyn GridState,
+    env: &mut HashMap<String, CellValue>,
+) -> CellValue {
+    if args.len() != 1 {
+        return count_error("MONTH");
+    }
+    match as_serial(&eval_expr(&args[0], grid, env)) {
+        Ok(s) => {
+            let (_, m, _) = ymd_from_serial(s);
+            CellValue::Number(m as f64)
+        }
+        Err(e) => e,
+    }
+}
+
+fn day_fn(
+    args: &[Expr],
+    grid: &dyn GridState,
+    env: &mut HashMap<String, CellValue>,
+) -> CellValue {
+    if args.len() != 1 {
+        return count_error("DAY");
+    }
+    match as_serial(&eval_expr(&args[0], grid, env)) {
+        Ok(s) => {
+            let (_, _, d) = ymd_from_serial(s);
+            CellValue::Number(d as f64)
+        }
+        Err(e) => e,
+    }
+}
+
+
+
+fn datedif(
+    args: &[Expr],
+    grid: &dyn GridState,
+    env: &mut HashMap<String, CellValue>,
+) -> CellValue {
+    if args.len() != 3 {
+        return count_error("DATEDIF");
+    }
+    let start = match as_serial(&eval_expr(&args[0], grid, env)) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let end = match as_serial(&eval_expr(&args[1], grid, env)) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    if end < start {
+        return CellValue::Error(LatticeError::argument_error(
+            "DATEDIF: end date must not precede start date",
+        ));
+    }
+    let unit = match eval_text(&args[2], grid, env) {
+        CellValue::Text(s) => s.to_uppercase(),
+        CellValue::Error(e) => return CellValue::Error(e),
+        other => {
+            return CellValue::Error(LatticeError::type_error("Text", variant_name(&other)))
+        }
+    };
+    let (sy, sm, sd) = ymd_from_serial(start);
+    let (ey, em, ed) = ymd_from_serial(end);
+    let result: i64 = match unit.as_str() {
+        "Y" => {
+            let mut y = (ey - sy) as i64;
+            if (em, ed) < (sm, sd) {
+                y -= 1;
+            }
+            y
+        }
+        "M" => {
+            let mut m = (ey - sy) as i64 * 12 + em as i64 - sm as i64;
+            if ed < sd {
+                m -= 1;
+            }
+            m
+        }
+        "D" => end.floor() as i64 - start.floor() as i64,
+        "YM" => {
+            let mut m = em as i64 - sm as i64;
+            if ed < sd {
+                m -= 1;
+            }
+            if m < 0 {
+                m += 12;
+            }
+            m
+        }
+        "YD" => {
+            let anchor = serial_from_ymd(ey, sm, sd);
+            let d = end.floor() as i64 - anchor.floor() as i64;
+            if d < 0 {
+                let prev = serial_from_ymd(ey - 1, sm, sd);
+                end.floor() as i64 - prev.floor() as i64
+            } else {
+                d
+            }
+        }
+        "MD" => {
+            let mut d = ed as i64 - sd as i64;
+            if d < 0 {
+                let (py, pm) = prev_month(ey, em);
+                d += days_in_month(py, pm) as i64;
+            }
+            d
+        }
+        _ => {
+            return CellValue::Error(LatticeError::argument_error(
+                "DATEDIF: unit must be Y, M, D, YM, YD, or MD",
+            ))
+        }
+    };
+    CellValue::Number(result as f64)
+}
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 30,
+    }
+}
+
+fn prev_month(year: i32, month: u32) -> (i32, u32) {
+    if month == 1 {
+        (year - 1, 12)
+    } else {
+        (year, month - 1)
+    }
 }
