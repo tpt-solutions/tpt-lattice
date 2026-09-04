@@ -159,7 +159,11 @@ pub async fn serve(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Returns `None` if access is allowed, or the `StatusCode` to reject with.
-fn authorize(config: &ServerConfig, token: Option<&str>, origin: Option<&str>) -> Option<StatusCode> {
+fn authorize(
+    config: &ServerConfig,
+    token: Option<&str>,
+    origin: Option<&str>,
+) -> Option<StatusCode> {
     if let Some(expected) = &config.auth_token {
         match token {
             Some(t) if t == expected => {}
@@ -208,7 +212,11 @@ fn append_history(path: &Path, op: &str) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
         use std::io::Write;
         let _ = f.write_all(op.as_bytes());
         let _ = f.write_all(b"\n");
@@ -233,7 +241,11 @@ fn load_or_create_room(state: &AppState, name: &str) -> Room {
         history: Arc::new(Mutex::new(history)),
         next_id: Arc::new(AtomicU32::new(1)),
     };
-    state.rooms.lock().unwrap().insert(name.to_string(), room.clone());
+    state
+        .rooms
+        .lock()
+        .unwrap()
+        .insert(name.to_string(), room.clone());
     room
 }
 
@@ -246,11 +258,7 @@ async fn ws_handler(
     let origin = headers
         .get(axum::http::header::ORIGIN)
         .and_then(|v| v.to_str().ok());
-    if let Some(status) = authorize(
-        &state.config,
-        params.token.as_deref(),
-        origin,
-    ) {
+    if let Some(status) = authorize(&state.config, params.token.as_deref(), origin) {
         return status.into_response();
     }
 
@@ -271,7 +279,7 @@ async fn handle_socket(socket: WebSocket, room: Room, state: AppState) {
         kind: "welcome".to_string(),
         id,
     }) {
-        if sender.send(Message::Text(welcome)).await.is_err() {
+        if sender.send(Message::Text(welcome.into())).await.is_err() {
             return;
         }
     }
@@ -281,7 +289,7 @@ async fn handle_socket(socket: WebSocket, room: Room, state: AppState) {
     {
         let history = room.history.lock().unwrap().clone();
         for op in history {
-            if sender.send(Message::Text(op)).await.is_err() {
+            if sender.send(Message::Text(op.into())).await.is_err() {
                 return;
             }
         }
@@ -290,7 +298,7 @@ async fn handle_socket(socket: WebSocket, room: Room, state: AppState) {
     // Forward every broadcast op to this client.
     let mut send_task = tokio::spawn(async move {
         while let Ok(msg) = rx.recv().await {
-            if sender.send(Message::Text(msg)).await.is_err() {
+            if sender.send(Message::Text(msg.into())).await.is_err() {
                 break;
             }
         }
@@ -308,8 +316,8 @@ async fn handle_socket(socket: WebSocket, room: Room, state: AppState) {
         let mut rate_count: u32 = 0;
         let mut rate_window = Instant::now();
         while let Some(Ok(msg)) = receiver.next().await {
-            let text = match msg {
-                Message::Text(t) => t,
+            let text: String = match msg {
+                Message::Text(t) => t.to_string(),
                 Message::Binary(b) => String::from_utf8_lossy(&b).into_owned(),
                 Message::Close(_) => break,
                 Message::Ping(_) | Message::Pong(_) => continue,
@@ -375,8 +383,8 @@ async fn handle_socket(socket: WebSocket, room: Room, state: AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tpt_lattice_crdt::CrdtStore;
     use tpt_lattice_core::{CellId, CellValue};
+    use tpt_lattice_crdt::CrdtStore;
 
     fn test_state(config: ServerConfig) -> AppState {
         Arc::new(ServerState {
@@ -429,10 +437,7 @@ mod tests {
             authorize(&cfg, None, Some("https://evil.com")),
             Some(StatusCode::FORBIDDEN)
         );
-        assert_eq!(
-            authorize(&cfg, None, Some("https://example.com")),
-            None
-        );
+        assert_eq!(authorize(&cfg, None, Some("https://example.com")), None);
     }
 
     #[test]
@@ -463,10 +468,7 @@ mod tests {
         {
             let room = load_or_create_room(&state, "doc");
             room.history.lock().unwrap().push(payload.clone());
-            append_history(
-                &dir.join(format!("{}.log", sanitize_room("doc"))),
-                &payload,
-            );
+            append_history(&dir.join(format!("{}.log", sanitize_room("doc"))), &payload);
         }
         // Re-open: history should be loaded from disk.
         let room = load_or_create_room(&state, "doc");
@@ -478,10 +480,7 @@ mod tests {
     fn garbage_payload_is_not_a_valid_op() {
         assert!(serde_json::from_str::<Op>("{\"hello\":\"world\"}").is_err());
         assert!(serde_json::from_str::<Op>("not json at all").is_err());
-        assert!(serde_json::from_str::<Op>(
-            &serde_json::to_string(&test_op()).unwrap()
-        )
-        .is_ok());
+        assert!(serde_json::from_str::<Op>(&serde_json::to_string(&test_op()).unwrap()).is_ok());
     }
 
     #[test]

@@ -131,7 +131,13 @@ impl Evaluator {
         }
         for (id, v) in &self.values {
             if !self.formulas.contains_key(id) {
-                cells.insert(*id, CellSnapshot { value: v.clone(), formula: None });
+                cells.insert(
+                    *id,
+                    CellSnapshot {
+                        value: v.clone(),
+                        formula: None,
+                    },
+                );
             }
         }
         SheetSnapshot { cells }
@@ -346,10 +352,7 @@ impl GridState for Evaluator {
     }
 
     fn iter_cells(&self) -> Vec<(CellId, CellValue)> {
-        self.values
-            .iter()
-            .map(|(&id, v)| (id, v.clone()))
-            .collect()
+        self.values.iter().map(|(&id, v)| (id, v.clone())).collect()
     }
 
     fn get_sheet_cell(&self, sheet: &str, id: CellId) -> Option<CellValue> {
@@ -539,9 +542,15 @@ mod versioning_tests {
         e.set_value(cell("A1"), CellValue::Number(3.0));
         e.set_formula(cell("A2"), "=A1 * 2").unwrap();
         let snap = e.snapshot();
-        assert_eq!(snap.cells.get(&cell("A1")).unwrap().value, CellValue::Number(3.0));
+        assert_eq!(
+            snap.cells.get(&cell("A1")).unwrap().value,
+            CellValue::Number(3.0)
+        );
         assert_eq!(snap.cells.get(&cell("A1")).unwrap().formula, None);
-        assert_eq!(snap.cells.get(&cell("A2")).unwrap().formula.as_deref(), Some("=A1 * 2"));
+        assert_eq!(
+            snap.cells.get(&cell("A2")).unwrap().formula.as_deref(),
+            Some("=A1 * 2")
+        );
     }
 
     #[test]
@@ -555,7 +564,7 @@ mod versioning_tests {
         let mut b = Evaluator::new();
         b.set_value(cell("A1"), CellValue::Number(1.0)); // unchanged
         b.set_value(cell("B1"), CellValue::Number(9.0)); // changed
-        // C1 removed
+                                                         // C1 removed
         b.set_value(cell("D1"), CellValue::Number(4.0)); // added
         let snap_b = b.snapshot();
 
@@ -577,13 +586,26 @@ mod versioning_tests {
 
         let ours = b.clone();
         let mut theirs = b.clone();
-        theirs.cells.insert(cell("A1"), CellSnapshot { value: CellValue::Number(10.0), formula: None });
+        theirs.cells.insert(
+            cell("A1"),
+            CellSnapshot {
+                value: CellValue::Number(10.0),
+                formula: None,
+            },
+        );
         theirs.cells.remove(&cell("A2"));
-        theirs.cells.insert(cell("A3"), CellSnapshot { value: CellValue::Number(3.0), formula: None });
+        theirs.cells.insert(
+            cell("A3"),
+            CellSnapshot {
+                value: CellValue::Number(3.0),
+                formula: None,
+            },
+        );
 
         let r = three_way_merge(&b, &ours, &theirs);
         assert!(r.conflicts.is_empty());
-        let applied: std::collections::HashMap<CellId, CellSnapshot> = r.applied.into_iter().collect();
+        let applied: std::collections::HashMap<CellId, CellSnapshot> =
+            r.applied.into_iter().collect();
         assert_eq!(applied[&cell("A1")].value, CellValue::Number(10.0));
         assert_eq!(applied[&cell("A3")].value, CellValue::Number(3.0));
         assert_eq!(applied[&cell("A2")].value, CellValue::Empty);
@@ -596,9 +618,21 @@ mod versioning_tests {
         let b = base.snapshot();
 
         let mut ours = b.clone();
-        ours.cells.insert(cell("A1"), CellSnapshot { value: CellValue::Number(2.0), formula: None });
+        ours.cells.insert(
+            cell("A1"),
+            CellSnapshot {
+                value: CellValue::Number(2.0),
+                formula: None,
+            },
+        );
         let mut theirs = b.clone();
-        theirs.cells.insert(cell("A1"), CellSnapshot { value: CellValue::Number(3.0), formula: None });
+        theirs.cells.insert(
+            cell("A1"),
+            CellSnapshot {
+                value: CellValue::Number(3.0),
+                formula: None,
+            },
+        );
 
         let r = three_way_merge(&b, &ours, &theirs);
         assert_eq!(r.conflicts.len(), 1);
@@ -610,12 +644,13 @@ mod versioning_tests {
     fn external_function_is_called_from_formula() {
         let mut e = Evaluator::new();
         e.set_value(cell("A1"), CellValue::Number(21.0));
-        e.add_external("DOUBLE", Box::new(|args: &[CellValue]| {
-            match args.first() {
+        e.add_external(
+            "DOUBLE",
+            Box::new(|args: &[CellValue]| match args.first() {
                 Some(CellValue::Number(n)) => CellValue::Number(n * 2.0),
                 _ => CellValue::Error(LatticeError::type_error("Number", "other")),
-            }
-        }));
+            }),
+        );
         e.set_formula(cell("B1"), "=DOUBLE(A1)").unwrap();
         e.evaluate().unwrap();
         assert_eq!(e.get_value(cell("B1")), CellValue::Number(42.0));
@@ -843,8 +878,10 @@ mod phase8_tests {
         let mut e = Evaluator::new();
         e.set_value(cell("A1"), text("Hello World"));
         e.set_formula(cell("B1"), "=FIND(\"World\", A1)").unwrap();
-        e.set_formula(cell("B2"), "=SUBSTITUTE(A1, \"World\", \"LES\")").unwrap();
-        e.set_formula(cell("B3"), "=REPLACE(A1, 1, 5, \"Hi\")").unwrap();
+        e.set_formula(cell("B2"), "=SUBSTITUTE(A1, \"World\", \"LES\")")
+            .unwrap();
+        e.set_formula(cell("B3"), "=REPLACE(A1, 1, 5, \"Hi\")")
+            .unwrap();
         e.evaluate().unwrap();
         assert_eq!(e.get_value(cell("B1")), CellValue::Number(7.0));
         assert_eq!(e.get_value(cell("B2")), text("Hello LES"));
@@ -905,10 +942,17 @@ mod phase8_tests {
         e.set_value(cell("B2"), text("high"));
         e.set_value(cell("B3"), text("high"));
         e.set_value(cell("B4"), text("low"));
-        e.set_formula(cell("C1"), "=COUNTIF(RANGE(A1, A4), \">4\")").unwrap();
-        e.set_formula(cell("C2"), "=SUMIF(RANGE(A1, A4), \">4\")").unwrap();
-        e.set_formula(cell("C3"), "=SUMIF(RANGE(B1, B4), \"high\", RANGE(A1, A4))").unwrap();
-        e.set_formula(cell("C4"), "=AVERAGEIF(RANGE(B1, B4), \"high\", RANGE(A1, A4))").unwrap();
+        e.set_formula(cell("C1"), "=COUNTIF(RANGE(A1, A4), \">4\")")
+            .unwrap();
+        e.set_formula(cell("C2"), "=SUMIF(RANGE(A1, A4), \">4\")")
+            .unwrap();
+        e.set_formula(cell("C3"), "=SUMIF(RANGE(B1, B4), \"high\", RANGE(A1, A4))")
+            .unwrap();
+        e.set_formula(
+            cell("C4"),
+            "=AVERAGEIF(RANGE(B1, B4), \"high\", RANGE(A1, A4))",
+        )
+        .unwrap();
         e.set_formula(
             cell("C5"),
             "=SUMIFS(RANGE(A1, A4), RANGE(A1, A4), \">4\", RANGE(B1, B4), \"high\")",
@@ -926,17 +970,22 @@ mod phase8_tests {
     fn lookups() {
         let mut e = Evaluator::new();
         table(&mut e);
-        e.set_formula(cell("D1"), "=VLOOKUP(2, RANGE(A1, C3), 3)").unwrap();
-        e.set_formula(cell("D2"), "=VLOOKUP(5, RANGE(A1, C3), 3)").unwrap(); // not found
+        e.set_formula(cell("D1"), "=VLOOKUP(2, RANGE(A1, C3), 3)")
+            .unwrap();
+        e.set_formula(cell("D2"), "=VLOOKUP(5, RANGE(A1, C3), 3)")
+            .unwrap(); // not found
         e.evaluate().unwrap();
         assert_eq!(e.get_value(cell("D1")), CellValue::Number(20.0));
         assert_eq!(e.get_value(cell("D2")), CellValue::Error(LatticeError::NA));
 
         let mut e2 = Evaluator::new();
         table(&mut e2);
-        e2.set_formula(cell("D1"), "=INDEX(RANGE(A1, C3), 2, 3)").unwrap();
-        e2.set_formula(cell("D2"), "=INDEX(RANGE(A1, C3), 2, 2)").unwrap();
-        e2.set_formula(cell("D3"), "=XLOOKUP(2, RANGE(A1, A3), RANGE(C1, C3))").unwrap();
+        e2.set_formula(cell("D1"), "=INDEX(RANGE(A1, C3), 2, 3)")
+            .unwrap();
+        e2.set_formula(cell("D2"), "=INDEX(RANGE(A1, C3), 2, 2)")
+            .unwrap();
+        e2.set_formula(cell("D3"), "=XLOOKUP(2, RANGE(A1, A3), RANGE(C1, C3))")
+            .unwrap();
         e2.evaluate().unwrap();
         assert_eq!(e2.get_value(cell("D1")), CellValue::Number(20.0));
         assert_eq!(e2.get_value(cell("D2")), text("b"));
@@ -950,7 +999,8 @@ mod phase8_tests {
         e3.set_value(cell("A2"), CellValue::Number(10.0));
         e3.set_value(cell("B2"), CellValue::Number(20.0));
         e3.set_value(cell("C2"), CellValue::Number(30.0));
-        e3.set_formula(cell("D1"), "=HLOOKUP(2, RANGE(A1, C2), 2)").unwrap();
+        e3.set_formula(cell("D1"), "=HLOOKUP(2, RANGE(A1, C2), 2)")
+            .unwrap();
         e3.evaluate().unwrap();
         assert_eq!(e3.get_value(cell("D1")), CellValue::Number(20.0));
     }
@@ -964,13 +1014,17 @@ mod phase8_tests {
         e.set_formula(cell("B1"), "=MEDIAN(RANGE(A1, A4))").unwrap();
         e.set_formula(cell("B2"), "=VAR(RANGE(A1, A4))").unwrap();
         e.set_formula(cell("B3"), "=STDEV(RANGE(A1, A4))").unwrap();
-        e.set_formula(cell("B4"), "=RANK(3, RANGE(A1, A4))").unwrap();
-        e.set_formula(cell("B5"), "=PERCENTILE(RANGE(A1, A4), 0.5)").unwrap();
+        e.set_formula(cell("B4"), "=RANK(3, RANGE(A1, A4))")
+            .unwrap();
+        e.set_formula(cell("B5"), "=PERCENTILE(RANGE(A1, A4), 0.5)")
+            .unwrap();
         e.evaluate().unwrap();
         assert_eq!(e.get_value(cell("B1")), CellValue::Number(2.5));
         // sample variance of 1..4 = ((1-2.5)^2+(2-2.5)^2+(3-2.5)^2+(4-2.5)^2)/3 = 1.6666..
         assert!((e.get_value(cell("B2")).as_number().unwrap() - 5.0 / 3.0).abs() < 1e-9);
-        assert!((e.get_value(cell("B3")).as_number().unwrap() - (5.0f64 / 3.0).sqrt()).abs() < 1e-9);
+        assert!(
+            (e.get_value(cell("B3")).as_number().unwrap() - (5.0f64 / 3.0).sqrt()).abs() < 1e-9
+        );
         assert_eq!(e.get_value(cell("B4")), CellValue::Number(2.0));
         assert_eq!(e.get_value(cell("B5")), CellValue::Number(2.5));
     }
@@ -1033,13 +1087,24 @@ mod date_tests {
     #[test]
     fn datedif_units() {
         let mut e = Evaluator::new();
-        e.set_value(cell("A1"), CellValue::Date(tpt_lattice_core::serial_from_ymd(2019, 1, 1)));
-        e.set_value(cell("A2"), CellValue::Date(tpt_lattice_core::serial_from_ymd(2021, 3, 15)));
-        e.set_formula(cell("B1"), "=DATEDIF(A1, A2, \"Y\")").unwrap();
-        e.set_formula(cell("B2"), "=DATEDIF(A1, A2, \"M\")").unwrap();
-        e.set_formula(cell("B3"), "=DATEDIF(A1, A2, \"D\")").unwrap();
-        e.set_formula(cell("B4"), "=DATEDIF(A1, A2, \"YM\")").unwrap();
-        e.set_formula(cell("B5"), "=DATEDIF(A1, A2, \"MD\")").unwrap();
+        e.set_value(
+            cell("A1"),
+            CellValue::Date(tpt_lattice_core::serial_from_ymd(2019, 1, 1)),
+        );
+        e.set_value(
+            cell("A2"),
+            CellValue::Date(tpt_lattice_core::serial_from_ymd(2021, 3, 15)),
+        );
+        e.set_formula(cell("B1"), "=DATEDIF(A1, A2, \"Y\")")
+            .unwrap();
+        e.set_formula(cell("B2"), "=DATEDIF(A1, A2, \"M\")")
+            .unwrap();
+        e.set_formula(cell("B3"), "=DATEDIF(A1, A2, \"D\")")
+            .unwrap();
+        e.set_formula(cell("B4"), "=DATEDIF(A1, A2, \"YM\")")
+            .unwrap();
+        e.set_formula(cell("B5"), "=DATEDIF(A1, A2, \"MD\")")
+            .unwrap();
         e.evaluate().unwrap();
         assert_eq!(e.get_value(cell("B1")), CellValue::Number(2.0)); // 2 full years
         assert_eq!(e.get_value(cell("B2")), CellValue::Number(26.0)); // 26 months

@@ -108,7 +108,10 @@ impl CellId {
                 break;
             }
             let digit = if b <= b'Z' { b - b'A' } else { b - b'a' } as u64;
-            match column.checked_mul(26).and_then(|c| c.checked_add(digit + 1)) {
+            match column
+                .checked_mul(26)
+                .and_then(|c| c.checked_add(digit + 1))
+            {
                 Some(v) => column = v,
                 None => overflowed = true,
             }

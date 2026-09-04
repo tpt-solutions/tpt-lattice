@@ -204,6 +204,7 @@ pub fn list_plugins() -> Vec<String> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(dead_code)]
 pub fn invoke_plugin(_name: &str, _args: &[CellValue]) -> CellValue {
     CellValue::Error(LatticeError::name_error(_name))
 }

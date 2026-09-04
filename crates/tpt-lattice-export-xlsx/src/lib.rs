@@ -25,7 +25,7 @@ use std::io::{Cursor, Write};
 
 use tpt_lattice_core::CellId;
 use tpt_lattice_io::SerializableGrid;
-use zip::write::FileOptions;
+use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
 /// Errors that can occur while exporting a workbook.
@@ -62,8 +62,8 @@ pub fn export_to_bytes(grid: &SerializableGrid) -> Result<Vec<u8>, ExportError> 
     let mut buf: Cursor<Vec<u8>> = Cursor::new(Vec::new());
     {
         let mut zip = ZipWriter::new(&mut buf);
-        let opts = FileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
+        let opts =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
         zip.start_file("[Content_Types].xml", opts)?;
         zip.write_all(CONTENT_TYPES.as_bytes())?;
@@ -146,11 +146,19 @@ fn build_worksheet(grid: &SerializableGrid) -> String {
 /// Render a single `<c>` element for `id`. Prefers the source formula when one is
 /// present (writing it as an Excel `<f>` element, minus the leading `=`), and
 /// falls back to the materialized value.
-fn cell_xml(id: CellId, value: Option<&tpt_lattice_core::CellValue>, formula: Option<&str>) -> String {
+fn cell_xml(
+    id: CellId,
+    value: Option<&tpt_lattice_core::CellValue>,
+    formula: Option<&str>,
+) -> String {
     let ref_ = id.to_a1();
     if let Some(f) = formula {
         let f = f.strip_prefix('=').unwrap_or(f);
-        let mut s = format!(r#"<c r="{ref_}"><f>{esc}</f>"#, ref_ = ref_, esc = xml_escape(f));
+        let mut s = format!(
+            r#"<c r="{ref_}"><f>{esc}</f>"#,
+            ref_ = ref_,
+            esc = xml_escape(f)
+        );
         // Include a cached value when we have one so the file opens with computed
         // numbers even before recalculation.
         if let Some(v) = value {
@@ -199,7 +207,9 @@ fn cell_parts(v: &tpt_lattice_core::CellValue) -> (&'static str, String) {
 fn value_inner(v: &tpt_lattice_core::CellValue) -> Option<String> {
     match v {
         tpt_lattice_core::CellValue::Number(n) => Some(format!("<v>{n}</v>")),
-        tpt_lattice_core::CellValue::Boolean(b) => Some(format!("<v>{}</v>", if *b { 1 } else { 0 })),
+        tpt_lattice_core::CellValue::Boolean(b) => {
+            Some(format!("<v>{}</v>", if *b { 1 } else { 0 }))
+        }
         _ => None,
     }
 }
@@ -272,8 +282,8 @@ const STYLES: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 
 #[cfg(test)]
 mod tests {
-    use std::io::Read;
     use super::*;
+    use std::io::Read;
     use tpt_lattice_core::{CellValue, LatticeError};
 
     #[test]

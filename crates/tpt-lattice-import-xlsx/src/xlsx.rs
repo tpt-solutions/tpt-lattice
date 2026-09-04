@@ -72,11 +72,7 @@ pub struct CellStyle {
 /// Enrich `sheet` with the merged-cell regions and per-cell styles found in the
 /// raw `bytes` for the given `sheet_name`. Best-effort: any part that cannot be
 /// read is skipped, leaving the corresponding fields empty.
-pub(crate) fn attach_styles_and_merges(
-    bytes: &[u8],
-    sheet_name: &str,
-    sheet: &mut ImportedSheet,
-) {
+pub(crate) fn attach_styles_and_merges(bytes: &[u8], sheet_name: &str, sheet: &mut ImportedSheet) {
     if let Some(styles_xml) = read_styles_xml(bytes) {
         let table = parse_styles(&styles_xml);
         if let Some(path) = worksheet_path(bytes, sheet_name) {
@@ -85,9 +81,7 @@ pub(crate) fn attach_styles_and_merges(
                 sheet.merged_cells = merged;
                 sheet.styles = cell_styles
                     .into_iter()
-                    .filter_map(|(cell, idx)| {
-                        build_style(&table, idx).map(|s| (cell, s))
-                    })
+                    .filter_map(|(cell, idx)| build_style(&table, idx).map(|s| (cell, s)))
                     .collect();
             }
         }
@@ -203,9 +197,7 @@ fn parse_rid_to_target(xml: &str) -> BTreeMap<String, String> {
 // Worksheet parsing: merged cells + per-cell style indices
 // ---------------------------------------------------------------------------
 
-fn parse_worksheet(
-    xml: &str,
-) -> (Vec<MergedRegion>, BTreeMap<CellId, u32>) {
+fn parse_worksheet(xml: &str) -> (Vec<MergedRegion>, BTreeMap<CellId, u32>) {
     let mut merged = Vec::new();
     let mut styles: BTreeMap<CellId, u32> = BTreeMap::new();
     let mut in_merge = false;
@@ -269,7 +261,10 @@ fn parse_merge_ref(v: &str) -> Option<MergedRegion> {
     let (a, b) = v.split_once(':')?;
     let top_left = CellId::try_from_a1(a.trim()).ok()?;
     let bottom_right = CellId::try_from_a1(b.trim()).ok()?;
-    Some(MergedRegion { top_left, bottom_right })
+    Some(MergedRegion {
+        top_left,
+        bottom_right,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -461,7 +456,12 @@ fn parse_styles(xml: &str) -> StyleTable {
         }
         buf.clear();
     }
-    StyleTable { fonts, cell_xfs, num_fmts, fills }
+    StyleTable {
+        fonts,
+        cell_xfs,
+        num_fmts,
+        fills,
+    }
 }
 
 fn build_style(table: &StyleTable, idx: u32) -> Option<CellStyle> {

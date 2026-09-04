@@ -24,10 +24,13 @@ serde_json = { workspace = true }
 js-sys = "0.3"
 
 # `ulid` pulls in `rand` -> `getrandom`, which needs the `wasm_js` backend to
-# compile for the browser wasm target. This is enabled only for wasm builds so
-# host/test builds are unaffected.
+# compile for the browser wasm target. `rand`/`getrandom` themselves span two
+# semver-incompatible major versions in the dependency graph (via different
+# transitive requirers), so both are enabled here. This is only enabled for
+# wasm builds so host/test builds are unaffected.
 [target.wasm32-unknown-unknown.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom4 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"

@@ -183,7 +183,7 @@ fn iso_to_date(s: &str) -> Option<f64> {
     let d: u32 = parts.next()?.parse().ok()?;
     let mut serial = serial_from_ymd(y, m, d);
     // Optional time component after a 'T' or space separator.
-    if let Some(idx) = s[date_part.len()..].find(|c| c == 'T' || c == ' ') {
+    if let Some(idx) = s[date_part.len()..].find(['T', ' ']) {
         let time = &s[date_part.len() + idx + 1..];
         let mut tp = time.split(':');
         if let (Some(hs), Some(ms), Some(ss)) = (tp.next(), tp.next(), tp.next()) {
@@ -300,7 +300,10 @@ fn read_cellref(chars: &[char], i: usize) -> Option<(usize, String)> {
     if after_letters == start || after_dollar == j {
         return None;
     }
-    let letters: String = chars[start..after_letters].iter().collect::<String>().to_uppercase();
+    let letters: String = chars[start..after_letters]
+        .iter()
+        .collect::<String>()
+        .to_uppercase();
     let digits: String = chars[after_dollar..j].iter().collect();
     Some((j, format!("{letters}{digits}")))
 }
@@ -343,7 +346,10 @@ mod tests {
 
     #[test]
     fn iso_date_parsing() {
-        assert_eq!(iso_to_date("2020-03-15").unwrap(), serial_from_ymd(2020, 3, 15));
+        assert_eq!(
+            iso_to_date("2020-03-15").unwrap(),
+            serial_from_ymd(2020, 3, 15)
+        );
         let noon = iso_to_date("2020-03-15T06:00:00").unwrap();
         assert!((noon - (serial_from_ymd(2020, 3, 15) + 0.25)).abs() < 1e-9);
         assert!(iso_to_date("not-a-date").is_none());

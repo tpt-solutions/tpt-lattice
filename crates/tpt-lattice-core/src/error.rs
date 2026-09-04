@@ -118,7 +118,10 @@ mod tests {
     #[test]
     fn display_formats() {
         assert_eq!(LatticeError::DivByZero.to_string(), "#DIV/0!");
-        assert_eq!(LatticeError::type_error("Number", "Text").to_string(), "#VALUE!");
+        assert_eq!(
+            LatticeError::type_error("Number", "Text").to_string(),
+            "#VALUE!"
+        );
         assert_eq!(LatticeError::name_error("FOO").to_string(), "#NAME?");
         assert_eq!(LatticeError::na().to_string(), "#N/A");
     }

@@ -392,14 +392,24 @@ impl CrdtStore {
                     self.cell_clock.insert(key, prec);
                 }
             }
-            Op::InsertRow { id, after, clock, actor } => {
+            Op::InsertRow {
+                id,
+                after,
+                clock,
+                actor,
+            } => {
                 // Use the op's own causal timestamp (not local state) so that
                 // concurrent structural edits resolve identically on every peer.
                 let prec = (clock.total(), actor);
                 self.row_inserts.insert(id, (after, prec));
                 self.rebuild_layout();
             }
-            Op::InsertColumn { id, after, clock, actor } => {
+            Op::InsertColumn {
+                id,
+                after,
+                clock,
+                actor,
+            } => {
                 let prec = (clock.total(), actor);
                 self.col_inserts.insert(id, (after, prec));
                 self.rebuild_layout();
