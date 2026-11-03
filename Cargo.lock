@@ -176,9 +176,9 @@ dependencies = [
 
 [[package]]
 name = "calamine"
-version = "0.36.1"
+version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fa68281b1a76b54a62156474adb06bb380a67e07dd60656e3217152b42183f3"
+checksum = "c9ca341b94bc4b29e08970b1a03914fad2dfe177e2ecb67fcd6de9046004aafb"
 dependencies = [
  "atoi_simd",
  "byteorder",
@@ -186,9 +186,9 @@ dependencies = [
  "encoding_rs",
  "fast-float2",
  "log",
- "quick-xml 0.41.0",
+ "quick-xml",
  "serde",
- "zip 8.6.0",
+ "zip",
 ]
 
 [[package]]
@@ -973,20 +973,11 @@ checksum = "a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0"
 
 [[package]]
 name = "quick-xml"
-version = "0.41.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
-dependencies = [
- "encoding_rs",
- "memchr",
-]
-
-[[package]]
-name = "quick-xml"
 version = "0.42.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "41b1177fdf999d2321d3fb46ff47159d9c1fb9ad66a4879f8c50a0b504615e9b"
 dependencies = [
+ "encoding_rs",
  "memchr",
 ]
 
@@ -1478,7 +1469,7 @@ version = "0.1.0"
 dependencies = [
  "tpt-lattice-core",
  "tpt-lattice-io",
- "zip 9.1.0",
+ "zip",
 ]
 
 [[package]]
@@ -1486,9 +1477,9 @@ name = "tpt-lattice-import-xlsx"
 version = "0.1.0"
 dependencies = [
  "calamine",
- "quick-xml 0.42.0",
+ "quick-xml",
  "tpt-lattice-core",
- "zip 9.1.0",
+ "zip",
 ]
 
 [[package]]
@@ -1576,12 +1567,6 @@ dependencies = [
  "sha1 0.10.7",
  "thiserror",
 ]
-
-[[package]]
-name = "typed-path"
-version = "0.12.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e28f89b80c87b8fb0cf04ab448d5dd0dd0ade2f8891bae878de66a75a28600e"
 
 [[package]]
 name = "typed-path"
@@ -1820,20 +1805,6 @@ checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
 
 [[package]]
 name = "zip"
-version = "8.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
-dependencies = [
- "crc32fast",
- "flate2",
- "indexmap",
- "memchr",
- "typed-path 0.12.3",
- "zopfli",
-]
-
-[[package]]
-name = "zip"
 version = "9.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2886b00003a72c4ccee3f42cfc34908d33b2508a74d827dc2a4244706475c704"
@@ -1854,7 +1825,7 @@ dependencies = [
  "ppmd-rust",
  "sha1 0.11.0",
  "time",
- "typed-path 0.13.0",
+ "typed-path",
  "windows-sys",
  "zeroize",
  "zopfli",
